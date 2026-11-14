@@ -23,7 +23,7 @@ from tokenizers import Tokenizer
 
 from block_primitives import hc_pre
 from frusium_loader import Catalog, RangeReader, default_model_root
-from generation import drive, reusable_prefix
+from generation import chat_prompt, drive, reusable_prefix  # chat_prompt re-exported for callers
 from layers0_3_block import GIB, SequentialBlocks
 import placement
 
@@ -61,13 +61,6 @@ class OutputHead:
             weight = self.read_chunk(start, end - start) if self.weights is None else self.weights[start:end]
             scores.append(F.linear(x, weight.to(x.device, dtype=torch.float32)))
         return torch.cat(scores)
-
-
-def chat_prompt(history, prompt):
-    text = '<｜begin▁of▁sentence｜>'
-    for user, reply in history:
-        text += f'<｜User｜>{user}<｜Assistant｜></think>{reply}<｜end▁of▁sentence｜>'
-    return text + f'<｜User｜>{prompt}<｜Assistant｜></think>'
 
 
 def make_sampler(temperature=0.0, top_k=0, top_p=1.0, seed=None):
@@ -206,6 +199,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--model', type=Path, default=Path(default_model_root()))
     parser.add_argument('--prompt', help='Run one prompt and exit. Omit for interactive chat.')
+    parser.add_argument('--system', help='Optional system message placed at the start of the conversation')
     parser.add_argument('--max-new-tokens', type=int, default=16)
     parser.add_argument('--context', type=int, default=256)
     parser.add_argument('--evidence', type=Path)
@@ -310,7 +304,7 @@ def main():
                     continue
                 if not command:
                     continue
-            prompt_text = chat_prompt(history, prompt)
+            prompt_text = chat_prompt(history, prompt, args.system)
             ids = tokenizer.encode(prompt_text, add_special_tokens=False).ids
             distributions.clear()
             torch.cuda.reset_peak_memory_stats()

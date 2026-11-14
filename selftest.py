@@ -15,8 +15,8 @@ from types import SimpleNamespace
 import unittest
 
 from cache_policy import Frequency, Tier, simulate
-from frusium_loader import Catalog, PrototypeTests  # noqa: F401  (collected below)
-from generation import drive, reusable_prefix
+from frusium_loader import Catalog, PrototypeTests, default_model_root  # noqa: F401  (tests collected below)
+from generation import chat_prompt, drive, reusable_prefix
 import placement
 
 
@@ -260,6 +260,39 @@ class GenerationTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             drive(fed, [1, 2, 3], 1, eos=99, pick=lambda seen: 4, run=broken)
         self.assertEqual(fed, [])
+
+
+class TemplateTests(unittest.TestCase):
+    CASES = [
+        (None, [], 'Say hello.'),
+        (None, [('Say hello.', 'Hello! How can I help?')], 'Reply with only the word Dino.'),
+        ('Be brief.', [('a', 'b'), ('c', 'd')], 'e'),
+    ]
+
+    def test_fixed_strings(self):
+        self.assertEqual(chat_prompt([], 'Say hello.'),
+                         '<｜begin▁of▁sentence｜><｜User｜>Say hello.<｜Assistant｜></think>')
+        self.assertEqual(chat_prompt([('a', 'b')], 'c', 'Be brief.'),
+                         '<｜begin▁of▁sentence｜><｜System｜>Be brief.<｜User｜>a<｜Assistant｜></think>b'
+                         '<｜end▁of▁sentence｜><｜User｜>c<｜Assistant｜></think>')
+
+    def test_matches_official_encoder(self):
+        folder = Path(default_model_root()) / 'encoding'
+        if not (folder / 'encoding.py').exists():
+            self.skipTest('Official encoding/encoding.py not found next to the checkpoint')
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('deepseek_official_encoding', folder / 'encoding.py')
+        official = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(official)
+        for system, history, prompt in self.CASES:
+            messages = [dict(role='system', content=system)] if system else []
+            for user, reply in history:
+                messages += [dict(role='user', content=user), dict(role='assistant', content=reply)]
+            messages.append(dict(role='user', content=prompt))
+            expected = official.encode_messages(messages, thinking_mode='chat')
+            if isinstance(expected, tuple):
+                expected = expected[0]
+            self.assertEqual(chat_prompt(history, prompt, system), expected)
 
 
 class PlacementTests(unittest.TestCase):

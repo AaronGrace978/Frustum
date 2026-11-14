@@ -4,6 +4,23 @@ Kept separate so the prefix-reuse logic can be tested without a GPU.
 """
 
 
+def chat_prompt(history, prompt, system=None):
+    """DeepSeek-V4.1 prompt for non-thinking chat.
+
+    Checked against the checkpoint's own encoding/encoding.py
+    (encode_messages(..., thinking_mode='chat')): identical strings for single
+    turns, multi-turn history and a leading system message. selftest.py repeats
+    that comparison whenever the official encoder is present.
+    history: list of (user, assistant) pairs.
+    """
+    text = '<｜begin▁of▁sentence｜>'
+    if system:
+        text += f'<｜System｜>{system}'
+    for user, reply in history:
+        text += f'<｜User｜>{user}<｜Assistant｜></think>{reply}<｜end▁of▁sentence｜>'
+    return text + f'<｜User｜>{prompt}<｜Assistant｜></think>'
+
+
 def reusable_prefix(fed, ids):
     """Length of the already-processed token prefix that the new prompt extends, else 0."""
     if fed and len(fed) < len(ids) and ids[:len(fed)] == fed:
