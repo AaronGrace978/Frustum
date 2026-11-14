@@ -14,13 +14,38 @@ from frusium_loader import Catalog, FrusiumLoader
 
 GIB=1024**3
 
-def gpu_decode(packed, scale):
+FP4_VALUES=[0,.5,1,1.5,2,3,4,6,-0.,-.5,-1,-1.5,-2,-3,-4,-6]
+_PAIR_LUT={}
+
+def gpu_decode_reference(packed, scale):
+    """Original v0 decoder: two masked table lookups and strided writes. Kept as the oracle."""
     if bool((scale==255).any()): raise ValueError('Invalid E8M0 NaN scale')
-    lut=torch.tensor([0,.5,1,1.5,2,3,4,6,-0.,-.5,-1,-1.5,-2,-3,-4,-6],device=packed.device)
+    lut=torch.tensor(FP4_VALUES,device=packed.device)
     out=torch.empty((packed.shape[0],packed.shape[1]*2),device=packed.device,dtype=torch.float32)
     out[:,0::2]=lut[(packed & 15).long()]
     out[:,1::2]=lut[(packed >> 4).long()]
     return (out.reshape(out.shape[0],-1,32)*torch.exp2(scale.float()-127).unsqueeze(-1)).flatten(1)
+
+def _pair_lut(device):
+    # One row per packed byte: (low nibble value, high nibble value). Built once per device.
+    lut=_PAIR_LUT.get(device)
+    if lut is None:
+        codes=torch.arange(256)
+        values=torch.tensor(FP4_VALUES)
+        lut=_PAIR_LUT[device]=torch.stack((values[codes & 15],values[codes >> 4]),1).to(device)
+    return lut
+
+def gpu_decode(packed, scale):
+    """Same values as gpu_decode_reference: one byte-pair lookup, then the block scale in place.
+
+    The table entries and the power-of-two scale products are exact, so the result is
+    bit-identical; decoder_test checks that on the GPU in use.
+    """
+    if bool((scale==255).any()): raise ValueError('Invalid E8M0 NaN scale')
+    rows,cols=packed.shape
+    out=_pair_lut(packed.device).index_select(0,packed.reshape(-1).int()).view(rows,cols*2)
+    out.view(rows,-1,32).mul_(torch.exp2(scale.float()-127).unsqueeze(-1))
+    return out
 
 def cpu_decode(packed, scale):
     # Decode sign/exponent/mantissa arithmetically, independently of GPU LUT.
@@ -47,6 +72,12 @@ def decoder_test():
     actual=gpu_decode(torch.from_numpy(p).cuda(),torch.from_numpy(s).cuda()).cpu().numpy()
     np.testing.assert_array_equal(actual,cpu_decode(p,s))
     assert actual[0,2]==.5*2**(119-127)
+    # Fast decoder against the original on a multi-block matrix, signed zeros included.
+    generator=np.random.default_rng(0)
+    p2=torch.from_numpy(generator.integers(0,256,(64,96),dtype=np.uint8)).cuda()
+    s2=torch.from_numpy(generator.integers(110,140,(64,6),dtype=np.uint8)).cuda()
+    fast=gpu_decode(p2,s2); slow=gpu_decode_reference(p2,s2)
+    assert fast.shape==slow.shape and torch.equal(fast.view(torch.int32),slow.view(torch.int32)),'Fast FP4 decode differs from reference'
     return True
 
 @torch.inference_mode()

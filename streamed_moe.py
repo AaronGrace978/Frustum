@@ -15,7 +15,7 @@ from expert_cache import TieredExpertCache
 
 GIB = 1024**3
 MIB = 1024**2
-from expert_correctness import gpu_decode, cpu_decode, activation
+from expert_correctness import gpu_decode, cpu_decode, activation, decoder_test
 
 
 def fp8_decode_cpu(raw, scales):
@@ -80,6 +80,7 @@ class StreamedMoE:
         # How many upcoming experts to read in the background while the GPU works.
         self.lookahead=max(1,2*io_threads) if lookahead is None else lookahead
         self._last_layer=None
+        decoder_test()  # tiny: proves the fast FP4 decoder is exact on this GPU before any weights are used
 
     def _group(self,layer,expert):
         key=(layer,expert)
@@ -113,7 +114,12 @@ class StreamedMoE:
         elif wi.dtype=='F8_E4M3':
             if bool((scale==255).any()): raise ValueError('NaN scale')
             matrix=raw.view(torch.float8_e4m3fn).float()
-            matrix=matrix*torch.exp2(scale.float()-127).repeat_interleave(32,0).repeat_interleave(32,1)[:matrix.shape[0],:matrix.shape[1]]
+            factor=torch.exp2(scale.float()-127)
+            r,c=matrix.shape
+            if r%32==0 and c%32==0 and tuple(scale.shape)==(r//32,c//32):
+                matrix.view(r//32,32,c//32,32).mul_(factor[:,None,:,None])  # same products, no expanded copy
+            else:
+                matrix=matrix*factor.repeat_interleave(32,0).repeat_interleave(32,1)[:r,:c]
         else: raise ValueError('Unsupported matrix format')
         return F.linear(activation(x),matrix).to(torch.bfloat16)
 
