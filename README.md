@@ -1,4 +1,123 @@
-# Frusium_loader — current prototype
+# Frusium_loader
+
+Streaming inference for checkpoints far larger than GPU memory. The reference target is DeepSeek-V4.1-Flash (about 510 GB on disk) on one 16 GB GPU, read from an external SSD.
+
+Current code: v0.5. The numbers under "History and recorded evidence" were measured with v0.4 and have not been re-measured. Run the verification step below to get v0.5 numbers for this machine.
+
+## Quick start
+
+    .\run_verify.ps1                      # tests, drive speed, v0.4 parity, timed chat
+    .\run_chat.ps1                        # interactive chat
+    .\run_chat.ps1 --prompt "Say hello." --max-new-tokens 6
+
+The launchers look for Python in this order: `FRUSIUM_PYTHON`, `.venv\Scripts\python.exe` in this folder, then the original Codex environment. To set up a fresh machine:
+
+    py -3.13 -m venv .venv
+    .venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu128
+    .venv\Scripts\pip install -r requirements.txt
+
+The model folder defaults to the parent of this folder. Set `FRUSIUM_MODEL` or pass `--model` to point elsewhere. Weights and the CUDA environment are not bundled.
+
+## What v0.5 changed
+
+The v0.4 decode profile showed where a token's 58 seconds went: 2.3 GB of routed experts arriving from the drive at a flat 37 MB/s, with 5.6 GB of dense weights and 0.16 GB of router weights re-read on every token as well. Model arithmetic was not the bottleneck, so v0.5 changes where bytes come from and leaves the arithmetic alone.
+
+| Area | v0.4 | v0.5 |
+|---|---|---|
+| Disk reads | New 8 MiB mmap window per chunk, shard reopened per tensor | Persistent handles, large positioned reads straight into the destination (`RangeReader`) |
+| Dense weights, routers | 256 MiB / 32 MiB LRU, re-read every token | Resident on the GPU when they fit |
+| Output head | Streamed by default: 1.3 GB read per token | Resident by default |
+| Routed experts | One GPU LRU, one read at a time | GPU tier, optional host-RAM tier, 4 reader threads (`expert_cache.py`) |
+| Eviction | LRU | Frequency-ranked when the GPU tier is smaller than one token's working set, LRU otherwise (`cache_policy.py`) |
+| Dense FP8 decode | Three full-size FP32 temporaries | One, same products |
+| Follow-up turns | Whole conversation re-prefilled | Processed prefix reused when the token ids match exactly |
+| Output | Printed at the end, greedy only | Streamed; optional temperature, top-k, top-p |
+| Launchers | Hard-coded interpreter path | `FRUSIUM_PYTHON` / local `.venv` / original path |
+
+`--legacy` on `run_chat.ps1` restores the v0.4 placement and the mmap reader for a same-day A/B run.
+
+Two things from the earlier plan were deliberately not built:
+
+- Caching decoded (FP32) weights. Nothing in the profile says decode time matters yet, and decoded weights take 4 to 8 times the VRAM of packed ones. Measure first with `--profile-decode`.
+- Guessing the next layer's experts. With a host tier holding recent experts, the candidates a guess could add are the ones that are neither recent nor frequent, and a wrong guess spends drive time. The experts of the current layer are known exactly after routing and are read in parallel.
+
+## Check your drive link first
+
+Every cold layer in the v0.4 profile read at 37 to 38 MB/s. A T7 on a USB 3.x port should manage several hundred. A flat 37 is what a USB 2.0 link delivers, though the old mmap path could also be responsible. This tells you which:
+
+    .\run_io_bench.ps1
+
+It reads fresh tensors through the old path and the new one and prints MB/s for each. If large direct reads are still under about 60 MB/s, the limit is the port, cable or hub, and no software change will move it. If direct reads are fast and mmap is slow, the new reader has already fixed it.
+
+## Placement
+
+At startup the chat runner prints its plan, for example dense weights resident, output head resident, shared experts pinned, and the size and policy of the routed-expert cache. Relevant options:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--gpu-cap-gib` | 12 | PyTorch allocator cap |
+| `--reserve-gib` | 2 | Part of the cap left for activations and temporaries |
+| `--dense`, `--output-head` | auto | `resident`, `streamed`, or let the plan decide |
+| `--expert-cache-mib` | plan | GPU budget for packed experts |
+| `--host-cache-gib` | auto | RAM tier behind the GPU cache; `0` disables. Auto uses half of free RAM above 6 GiB, at most 16 GiB |
+| `--io-threads` | 4 | Background readers for experts |
+| `--cache-policy` | auto | `lfu` or `lru` for the GPU expert tier |
+| `--no-reuse` | off | Re-prefill every turn |
+| `--temperature`, `--top-k`, `--top-p`, `--seed` | greedy | Sampling |
+
+On a 16 GB card with the default cap, the always-used set takes about 8 GiB, which leaves roughly 2 GiB for routed experts: about 110 of the up to 240 a token touches. The host tier is what absorbs the rest, so a machine with more free RAM will read less from the drive. If you hit a CUDA out-of-memory error, raise `--reserve-gib` or pass `--dense streamed`.
+
+In chat: `/reset` clears the conversation, `/stats` prints cache counters, `/quit` exits. Each reply ends with a line showing seconds per token, bytes read from disk and where expert requests were served from.
+
+## Verifying
+
+`.\run_verify.ps1` runs four steps and writes everything to `verify_runs\<timestamp>\`:
+
+1. `selftest.py`: 26 unit tests on a synthetic checkpoint. No GPU or weights.
+2. `bench-io`: the drive check above.
+3. `layer0_block.py`: the layer-0 output hash, routing and stage fingerprints must equal `repro_baseline.json`, recorded with v0.4. This is the proof that v0.5 did not change arithmetic.
+4. `frusium_chat.py --prompt "Say hello."` for six tokens: token ids must equal the saved v0.4 run, and the timings are listed beside it.
+
+`run_repro_test.ps1` will report `same_source: false` against the old baseline because the sources changed. The other checks in it should still pass.
+
+Status of the v0.5 code as delivered: the reader, cache policy, expert cache, placement planner and generation control flow pass their unit tests on CPU. The GPU path has not been executed since the changes. Step 3 and step 4 are that test.
+
+## Is the output right?
+
+Agreement so far is this implementation against itself and against NumPy re-derivations of single components. Whether all 40 layers match the published model is open. `reference_parity.py` measures it against a provider serving the same checkpoint, or against another Frusium run:
+
+    .\run_chat.ps1 --prompt "Say hello." --max-new-tokens 12 --top-logprobs 10 --evidence ours.json
+    .\run_parity.ps1 ours.json --api-base https://host/v1 --api-model NAME --endpoint completions
+
+See the script header for caveats about chat templates and provider quantization.
+
+## Baseline for the GGUF backends
+
+`phi4_chat.py` and `glm_chat.py` are unchanged apart from inheriting the faster reader. Both models fit on a 16 GB card, where llama.cpp is the standard to compare against, and their saved decode speed here is about 1.4 s per token. That cost is per-use dequantization in PyTorch, which the loader changes do not touch. `baseline_llamacpp.py` runs `llama-bench` on the same file and prints both figures.
+
+## Modules
+
+| File | Role |
+|---|---|
+| `frusium_loader.py` | Header-only catalog, `RangeReader`, `FrusiumLoader` byte cache, `bench-io` |
+| `cache_policy.py` | Frequency ranking, tier bookkeeping, replay simulator (no torch) |
+| `expert_cache.py` | GPU + host tiers and threaded reads for routed experts |
+| `placement.py` | What stays resident, from checkpoint metadata |
+| `generation.py` | Prefill / reuse / decode control flow (no torch) |
+| `streamed_moe.py`, `layers0_3_block.py`, `layer0_block.py`, `block_primitives.py`, `sparse_rows.py`, `expert_correctness.py` | Model arithmetic and its tests |
+| `frusium_chat.py` | Chat runner |
+| `decode_cache_replay.py` | Replay recorded routing through cache policies and tier sizes |
+| `verify_upgrade.py`, `selftest.py`, `reference_parity.py`, `baseline_llamacpp.py` | Verification |
+| `benchmark_layers.py` | Original synthetic transfer benchmark, kept with its v0 cache |
+| `backup_v0.4/` | Files as they were before v0.5 |
+
+---
+
+# History and recorded evidence (v0.1 to v0.4)
+
+Everything below was written for, and measured with, the earlier code. Sentences about launchers being machine-specific, streamed output heads and re-prefilling on every turn describe v0.4.
+
+## v0.4 prototype notes
 
 GPU: NVIDIA RTX 5060 Ti 16 GB. Validated with Python 3.13 and torch 2.11.0+cu128.
 Working folder: G:\Models\DeepSeek-V4.1-Flash\Frusium_loader

@@ -17,7 +17,7 @@ import torch.nn.functional as F
 
 from block_primitives import hc_mixes, hc_post, hc_pre, rms_norm
 from expert_correctness import activation
-from frusium_loader import Catalog, FrusiumLoader
+from frusium_loader import Catalog, FrusiumLoader, default_model_root
 from layer0_block import RingKV
 from reproducibility import cache_sha256, tensor_sha256
 from sparse_rows import SparseRows
@@ -124,7 +124,14 @@ class DenseOps:
             scale = scale_raw.reshape(scales.shape)
             if bool((scale == 255).any()):
                 raise ValueError(f'NaN E8M0 scale in {name}')
-            return value * torch.exp2(scale.float() - 127).repeat_interleave(32, 0).repeat_interleave(32, 1)[:weight.shape[0], :weight.shape[1]]
+            factor = torch.exp2(scale.float() - 127)
+            rows, cols = weight.shape
+            if rows % 32 == 0 and cols % 32 == 0 and tuple(scales.shape) == (rows // 32, cols // 32):
+                # Same element-by-element products as the expanded form below, without
+                # materialising two more full-size FP32 copies of the matrix.
+                value.view(rows // 32, 32, cols // 32, 32).mul_(factor[:, None, :, None])
+                return value
+            return value * factor.repeat_interleave(32, 0).repeat_interleave(32, 1)[:rows, :cols]
 
     def linear(self, x, name):
         weight = self.matrix(name)
@@ -501,14 +508,17 @@ class Block:
 
 
 class SequentialBlocks:
-    def __init__(self, catalog, sequence_capacity, dense_cache_mib, expert_cache_mib, layer_count=4):
+    def __init__(self, catalog, sequence_capacity, dense_cache_mib, expert_cache_mib, layer_count=4, moe_options=None):
+        """dense_cache_mib at least the size of all dense weights makes them resident.
+        moe_options are passed to StreamedMoE (host tier, router cache, policies, threads).
+        """
         self.catalog, self.cfg = catalog, catalog.config['text_config']
         if self.cfg['compress_ratios'][:4] != [0, 0, 2, 2] or tuple(self.cfg['kv_source_layer_ids'][:1]) != (2,) or tuple(self.cfg['index_source_layer_ids'][:1]) != (2,):
             raise ValueError('Unexpected first-four-layer attention schedule')
         self.capacity = sequence_capacity
         self.hasher = EngramHashes(catalog.root, self.cfg)
         self.ops = DenseOps(catalog, dense_cache_mib)
-        self.moe = StreamedMoE(catalog, expert_cache_mib)
+        self.moe = StreamedMoE(catalog, expert_cache_mib, **(moe_options or {}))
         self.lookup = SparseRows(catalog)
         self.shared = SharedAttention()
         self.engram = Engram(self.ops, self.lookup)
@@ -590,7 +600,7 @@ def primitive_tests():
 @torch.inference_mode()
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--model', default=r'G:\Models\DeepSeek-V4.1-Flash')
+    parser.add_argument('--model', default=default_model_root())
     parser.add_argument('--tokens', default='100,200,300', help='Three or more comma-separated text token IDs')
     parser.add_argument('--dense-cache-mib', type=int, default=256)
     parser.add_argument('--expert-cache-mib', type=int, default=256)

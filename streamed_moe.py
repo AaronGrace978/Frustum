@@ -1,5 +1,7 @@
 """Streamed real MoE sublayer with actual text routing and shared FP8 expert.
-Correctness baseline only: no attention, residual block, or text generation.
+Run directly, this is the MoE correctness test: no attention, residual block, or
+text generation. The arithmetic is unchanged from v0; only where the packed
+expert bytes come from (expert_cache.TieredExpertCache) has changed.
 """
 import argparse
 import json
@@ -8,8 +10,11 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
-from frusium_loader import Catalog, FrusiumLoader
-from benchmark_layers import AsyncExpertCache, GIB, MIB
+from frusium_loader import Catalog, FrusiumLoader, default_model_root
+from expert_cache import TieredExpertCache
+
+GIB = 1024**3
+MIB = 1024**2
 from expert_correctness import gpu_decode, cpu_decode, activation
 
 
@@ -55,13 +60,26 @@ def expert_forward(x,weight,linear,limit):
 
 
 class StreamedMoE:
-    def __init__(self,catalog,cache_mib=256):
+    def __init__(self,catalog,cache_mib=256,*,host_cache_mib=0,router_cache_mib=32,io_threads=4,
+                 gpu_policy='lfu',host_policy='lru',pin_shared=False,cap_bytes=12*GIB,headroom_bytes=2*GIB,
+                 lookahead=None):
+        """cache_mib: GPU budget for packed experts. host_cache_mib: optional RAM tier behind it.
+        router_cache_mib: give it the size of all router weights to stop re-reading them per token.
+        pin_shared: never evict shared experts (the budget must have room for all of them).
+        io_threads=0 restores strictly sequential reads.
+        """
         self.catalog=catalog
         self.cfg=catalog.config['text_config']
         if self.cfg['scoring_func']!='sqrtsoftplus' or self.cfg['n_shared_experts']!=1:
             raise ValueError('Unsupported MoE configuration')
-        self.router=FrusiumLoader(catalog,'cuda',32*MIB)
-        self.cache=AsyncExpertCache(torch,catalog,{},torch.device('cuda:0'),cache_mib*MIB,12*GIB,2*GIB)
+        self.router=FrusiumLoader(catalog,'cuda',router_cache_mib*MIB)
+        pinned=(lambda key:key[1]=='shared') if pin_shared else None
+        self.cache=TieredExpertCache(torch,catalog,torch.device('cuda:0'),cache_mib*MIB,host_cache_mib*MIB,
+            io_threads=io_threads,gpu_policy=gpu_policy,host_policy=host_policy,pinned=pinned,
+            cap_bytes=cap_bytes,headroom_bytes=headroom_bytes)
+        # How many upcoming experts to read in the background while the GPU works.
+        self.lookahead=max(1,2*io_threads) if lookahead is None else lookahead
+        self._last_layer=None
 
     def _group(self,layer,expert):
         key=(layer,expert)
@@ -115,15 +133,16 @@ class StreamedMoE:
             torch.testing.assert_close(weights.cpu(),wr,rtol=2e-5,atol=2e-6)
         keys=[self._group(layer,int(e)) for e in sorted(set(ids_cpu.flatten().tolist()))]
         keys.append(self._group(layer,'shared'))
-        self.cache.compute_stream.wait_stream(torch.cuda.current_stream())
+        if self._last_layer is None or layer<=self._last_layer:
+            self.cache.new_pass()
+        self._last_layer=layer
+        self.cache.discard_pending()
         y=torch.zeros_like(x,dtype=torch.float32)
         yr=torch.zeros_like(x_cpu,dtype=torch.float32)
-        self.cache.compute_stream.wait_stream(torch.cuda.current_stream())
         for pos,key in enumerate(keys):
-            self.cache.requests+=1
-            self.cache.hits+=int(key in self.cache.cache)
-            self.cache.ensure(key,{key})
-            entry=self.cache.cache[key]
+            # The selected experts are known exactly after routing; read the next few in the background.
+            self.cache.prefetch(keys[pos:pos+1+self.lookahead])
+            entry=self.cache.get(key,(key,))
             if key[1]=='shared':
                 rows=torch.arange(x.shape[0]);cols=None
             else:
@@ -131,17 +150,9 @@ class StreamedMoE:
             # Small index/mix tensors prepared before dispatching compute.
             rows_gpu=rows.to(x.device)
             coeff=None if cols is None else weights[rows_gpu,cols.to(x.device),None]
-            self.cache.compute_stream.wait_stream(torch.cuda.current_stream())
-            with torch.cuda.stream(self.cache.compute_stream):
-                self.cache.compute_stream.wait_event(entry.ready)
-                for raw in entry.tensors: raw.record_stream(self.cache.compute_stream)
-                part=expert_forward(x[rows_gpu],coeff,
-                    lambda z,w:self._linear(entry,key,z,w),cfg['swiglu_limit'])
-                y.index_add_(0,rows_gpu,part.float())
-                entry.done=torch.cuda.Event(); entry.done.record(self.cache.compute_stream)
-            # The selected next expert is known exactly after routing; prefetch it.
-            if pos+1<len(keys): self.cache.prefetch([keys[pos+1]],{key,keys[pos+1]})
-            entry.done.synchronize()
+            part=expert_forward(x[rows_gpu],coeff,
+                lambda z,w:self._linear(entry,key,z,w),cfg['swiglu_limit'])
+            y.index_add_(0,rows_gpu,part.float())
             if validate:
                 cr=None if cols is None else wr[rows,cols,None]
                 ref=expert_forward(x_cpu[rows],cr,
@@ -175,7 +186,7 @@ def fp8_decoder_test():
 @torch.inference_mode()
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--model',default=r'G:\Models\DeepSeek-V4.1-Flash')
+    p.add_argument('--model',default=default_model_root())
     p.add_argument('--layers',default='0,1,2,3')
     p.add_argument('--tokens',type=int,default=2)
     p.add_argument('--cache-mib',type=int,default=256)
@@ -210,7 +221,7 @@ def main():
             layers=records,logical_weight_read_MB=(engine.cache.reader.bytes_read+engine.router.reader.bytes_read)/1e6,
             peak_allocated_GiB=torch.cuda.max_memory_allocated()/GIB,
             peak_reserved_GiB=torch.cuda.max_memory_reserved()/GIB,
-            evictions=engine.cache.evictions,cache_hits_including_prefetch=engine.cache.hits,
+            evictions=engine.cache.evictions,gpu_cache_hits=engine.cache.hits,expert_cache=engine.cache.stats(),
             expert_requests=engine.cache.requests,elapsed_including_CPU_validation=time.perf_counter()-begin)
         Path(args.output).write_text(json.dumps(report,indent=2));print(json.dumps(report,indent=2))
     finally:engine.close()

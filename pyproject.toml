@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "frusium-loader"
+version = "0.5.0"
+description = "Bounded-memory streaming inference for checkpoints far larger than GPU memory"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Aaron Grace" }]
+# Install a CUDA build of torch first; see the README. A plain `pip install torch` may be CPU-only.
+dependencies = ["torch>=2.6", "numpy", "tokenizers"]
+
+[project.optional-dependencies]
+gguf = ["gguf>=0.19"]
+
+[project.scripts]
+frusium-chat = "frusium_chat:main"
+frusium-inspect = "frusium_loader:main"
+
+[tool.setuptools]
+py-modules = [
+    "frusium_loader", "cache_policy", "expert_cache", "placement", "generation",
+    "frusium_chat", "streamed_moe", "layers0_3_block", "layer0_block", "block_primitives",
+    "expert_correctness", "sparse_rows", "reproducibility", "decode_cache_replay",
+    "reference_parity", "verify_upgrade", "selftest",
+]

@@ -1,4 +1,4 @@
-"""Frusium_loader: bounded safetensors streaming prototype, not an inference engine.
+"""Frusium_loader: bounded safetensors streaming core (catalog, reader, byte cache).
 Default inspect reads JSON/headers only. No model source is imported or executed.
 """
 from __future__ import annotations
@@ -7,12 +7,20 @@ from collections import Counter, OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
 import json
+import io
 import mmap
+import os
 from pathlib import Path
 import struct
 import tempfile
+import threading
 import time
 import unittest
+
+
+def default_model_root():
+    """FRUSIUM_MODEL if set, otherwise the folder that contains this project."""
+    return os.environ.get('FRUSIUM_MODEL') or str(Path(__file__).resolve().parent.parent)
 
 @dataclass(frozen=True)
 class TensorRange:
@@ -78,37 +86,140 @@ class Catalog:
                     header_bytes_read=self.header_bytes, weight_payload_bytes_read=0)
 
 class RangeReader:
-    """Map one aligned window at a time; no whole-shard copy or retained mapping.
+    """Positioned reads from persistent file handles; no whole-shard copy.
+
+    v0 mapped a fresh 8 MiB mmap window per chunk and reopened the shard for
+    every tensor. Cold pages then arrive through page faults, a few dozen KiB
+    per request, which is slow on USB storage. This version keeps one handle
+    per (thread, shard) and issues large sequential read calls straight into
+    the destination buffer. mode='mmap' (or FRUSIUM_READER=mmap in the
+    environment) selects the old path for A/B runs.
+
+    Thread-safe: every thread owns its handles. bytes_read counts logical
+    payload bytes; the OS cache may serve them without touching the drive.
     OS page caching remains OS-managed; this is not a total process-RAM limit.
     """
-    def __init__(self, chunk_bytes=8*1024*1024):
+    MAX_HANDLES = 12  # per thread; a Windows process defaults to 512 CRT handles
+
+    def __init__(self, chunk_bytes=8*1024*1024, mode=None, access='sequential'):
+        mode = mode or os.environ.get('FRUSIUM_READER', 'direct')
         if chunk_bytes <= 0:
             raise ValueError('chunk_bytes must be positive')
+        if mode not in ('direct', 'mmap') or access not in ('sequential', 'random'):
+            raise ValueError('mode is direct|mmap and access is sequential|random')
         self.chunk_bytes = chunk_bytes
+        self.mode = mode
         self.bytes_read = 0
+        self.read_seconds = 0.0
+        self._lock = threading.Lock()
+        self._local = threading.local()
+        self._all = []
+        hint = 'O_SEQUENTIAL' if access == 'sequential' else 'O_RANDOM'
+        self._flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, hint, 0)
 
-    def copy(self, item, consume):
-        with item.path.open('rb') as f:
-            for relative in range(0, item.size, self.chunk_bytes):
-                size = min(self.chunk_bytes, item.size-relative)
-                absolute = item.offset + relative
+    def _handle(self, path):
+        handles = getattr(self._local, 'handles', None)
+        if handles is None:
+            handles = self._local.handles = OrderedDict()
+            with self._lock:
+                self._all.append(handles)
+        handle = handles.get(path)
+        if handle is None:
+            while len(handles) >= self.MAX_HANDLES:
+                _, old = handles.popitem(last=False)
+                old.close()
+            handle = handles[path] = io.FileIO(os.open(path, self._flags), 'rb', closefd=True)
+        else:
+            handles.move_to_end(path)
+        return handle
+
+    def _account(self, size, seconds):
+        with self._lock:
+            self.bytes_read += size
+            self.read_seconds += seconds
+
+    def readinto(self, item, dest, start=0):
+        """Fill `dest` (a writable bytes-like object) from item[start:start+len(dest)]."""
+        view = memoryview(dest).cast('B')
+        size = len(view)
+        if start < 0 or start + size > item.size:
+            raise ValueError('Read outside tensor extent')
+        began = time.perf_counter()
+        if self.mode == 'mmap':
+            self._mmap_into(item, view, start)
+        else:
+            handle = self._handle(item.path)
+            handle.seek(item.offset + start)
+            done = 0
+            while done < size:
+                got = handle.readinto(view[done:min(size, done + (1 << 30))])
+                if not got:
+                    raise ValueError('Truncated tensor payload: ' + item.name)
+                done += got
+        view.release()
+        self._account(size, time.perf_counter() - began)
+
+    def _mmap_into(self, item, view, start):
+        with open(item.path, 'rb') as f:
+            for relative in range(0, len(view), self.chunk_bytes):
+                size = min(self.chunk_bytes, len(view) - relative)
+                absolute = item.offset + start + relative
                 base = absolute - absolute % mmap.ALLOCATIONGRANULARITY
                 delta = absolute - base
-                with mmap.mmap(f.fileno(), delta+size, access=mmap.ACCESS_READ,
-                               offset=base) as mm:
-                    view = memoryview(mm)[delta:delta+size]
+                with mmap.mmap(f.fileno(), delta + size, access=mmap.ACCESS_READ, offset=base) as mm:
+                    source = memoryview(mm)[delta:delta + size]
                     try:
-                        consume(relative, view)
+                        view[relative:relative + size] = source
                     finally:
-                        view.release()
-                self.bytes_read += size
+                        source.release()
+
+    def read(self, item):
+        """Return the whole payload as a new bytearray."""
+        data = bytearray(item.size)
+        if item.size:
+            self.readinto(item, data)
+        return data
+
+    def copy(self, item, consume):
+        """Chunked callback API kept for existing callers: consume(offset, view).
+
+        The view is only valid during the callback.
+        """
+        buffer = getattr(self._local, 'buffer', None)
+        if buffer is None or len(buffer) < min(self.chunk_bytes, item.size):
+            buffer = self._local.buffer = bytearray(min(self.chunk_bytes, max(item.size, 1)))
+        for relative in range(0, item.size, self.chunk_bytes):
+            size = min(self.chunk_bytes, item.size - relative)
+            view = memoryview(buffer)[:size]
+            try:
+                self.readinto(item, view, relative)
+                consume(relative, view)
+            finally:
+                view.release()
+
+    def close(self):
+        with self._lock:
+            groups, self._all = self._all, []
+        for handles in groups:
+            for handle in list(handles.values()):
+                handle.close()
+            handles.clear()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
 class FrusiumLoader:
-    """Single-threaded byte cache with leased entries and bounded staging.
-    CUDA copies use a dedicated stream but synchronize each chunk before reuse.
-    v0 prioritizes correctness; double-buffer overlap is intentionally deferred.
-    Consumers must release a lease only after submitting all tensor operations.
-    Never retain a tensor reference outside its lease.
+    """Byte cache with leased entries and one bounded staging buffer.
+
+    Single-threaded. Each tensor is read from disk straight into a page-locked
+    staging buffer and uploaded with a blocking copy on the current CUDA
+    stream, so no cross-stream lifetime tracking is needed. Give it a budget
+    that covers every tensor you request and it behaves as a resident store:
+    after the first pass nothing is read again.
+    Consumers must finish using a tensor before releasing its lease.
     """
     def __init__(self, catalog, device='cpu', budget_bytes=256*1024*1024,
                  chunk_bytes=8*1024*1024):
@@ -130,7 +241,6 @@ class FrusiumLoader:
         self.used = self.peak = self.hits = self.misses = self.evictions = 0
         self.stage = torch.empty(chunk_bytes, dtype=torch.uint8, pin_memory=self.cuda)
         self.stage_view = memoryview(self.stage.numpy())
-        self.stream = torch.cuda.Stream(device=self.device) if self.cuda else None
 
     def _sync(self):
         if self.cuda:
@@ -148,27 +258,18 @@ class FrusiumLoader:
             victim = next((k for k in self.cache if not self.leases[k]), None)
             if victim is None:
                 raise RuntimeError('Cache exhausted by live leases')
-            self._sync()
             old = self.cache.pop(victim)
             self.used -= old.numel()
             del old
             self.evictions += 1
         self.misses += 1
         target = self.torch.empty(item.size, dtype=self.torch.uint8, device=self.device)
-        if self.cuda:
-            # Reused allocations may still have work queued on the allocating stream.
-            self.stream.wait_stream(self.torch.cuda.current_stream(self.device))
-            target.record_stream(self.stream)
-        def consume(offset, view):
-            n = len(view)
-            self.stage_view[:n] = view
-            if self.cuda:
-                with self.torch.cuda.stream(self.stream):
-                    target[offset:offset+n].copy_(self.stage[:n], non_blocking=True)
-                self.stream.synchronize()
-            else:
-                target[offset:offset+n].copy_(self.stage[:n])
-        self.reader.copy(item, consume)
+        chunk = len(self.stage_view)
+        for offset in range(0, item.size, chunk):
+            n = min(chunk, item.size - offset)
+            self.reader.readinto(item, self.stage_view[:n], offset)
+            # Blocking copy: the staging buffer is free again when this returns.
+            target[offset:offset+n].copy_(self.stage[:n])
         self.cache[name] = target
         self.used += item.size
         self.peak = max(self.peak, self.used)
@@ -181,7 +282,6 @@ class FrusiumLoader:
         try:
             yield tensor
         finally:
-            self._sync()
             self.leases[name] -= 1
 
     def stats(self):
@@ -197,6 +297,7 @@ class FrusiumLoader:
         self.cache.clear()
         self.used = 0
         self.stage_view.release()
+        self.reader.close()
 
 class PrototypeTests(unittest.TestCase):
     def setUp(self):
@@ -215,13 +316,46 @@ class PrototypeTests(unittest.TestCase):
     def test_header_only(self):
         self.assertEqual(self.catalog.report()['weight_payload_bytes_read'],0)
     def test_unaligned_chunk_copy(self):
-        out = bytearray(16)
-        reader = RangeReader(3)
-        def consume(offset, view):
-            out[offset:offset+len(view)] = view
-        reader.copy(self.catalog.tensors['b'],consume)
-        self.assertEqual(out,bytes(range(16,32)))
-        self.assertEqual(reader.bytes_read,16)
+        for mode in ('direct', 'mmap'):
+            out = bytearray(16)
+            reader = RangeReader(3, mode=mode)
+            def consume(offset, view):
+                out[offset:offset+len(view)] = view
+            reader.copy(self.catalog.tensors['b'],consume)
+            self.assertEqual(out,bytes(range(16,32)))
+            self.assertEqual(reader.bytes_read,16)
+            reader.close()
+    def test_positioned_reads(self):
+        reader = RangeReader()
+        item = self.catalog.tensors['c']
+        self.assertEqual(reader.read(item), bytes(range(32,48)))
+        part = bytearray(5)
+        reader.readinto(item, part, 9)
+        self.assertEqual(part, bytes(range(41,46)))
+        with self.assertRaises(ValueError):
+            reader.readinto(item, bytearray(5), 12)
+        self.assertEqual(reader.bytes_read, 21)
+        reader.close()
+    def test_threaded_reads_and_handle_cap(self):
+        from concurrent.futures import ThreadPoolExecutor
+        reader = RangeReader()
+        reader.MAX_HANDLES = 1
+        names = ['a','b','c'] * 40
+        with ThreadPoolExecutor(4) as pool:
+            results = list(pool.map(lambda n: bytes(reader.read(self.catalog.tensors[n])), names))
+        expected = dict(a=bytes(range(16)), b=bytes(range(16,32)), c=bytes(range(32,48)))
+        self.assertEqual(results, [expected[n] for n in names])
+        self.assertEqual(reader.bytes_read, 16 * len(names))
+        self.assertTrue(all(len(h) <= 1 for h in reader._all))
+        reader.close()
+    def test_truncated_payload_detected_on_read(self):
+        item = self.catalog.tensors['c']
+        path = self.root/'s.safetensors'
+        path.write_bytes(path.read_bytes()[:-4])
+        reader = RangeReader()
+        with self.assertRaises(ValueError):
+            reader.read(item)
+        reader.close()
     def test_cache_and_leases(self):
         loader = FrusiumLoader(self.catalog,budget_bytes=32,chunk_bytes=3)
         with loader.acquire('a') as a:
@@ -251,12 +385,76 @@ class PrototypeTests(unittest.TestCase):
             dict(weight_map={'a':'../outside.safetensors'})))
         with self.assertRaises(ValueError): Catalog(self.root)
 
+def bench_io(catalog, total_mib=384, threads=4, seed=None, min_mib=8):
+    """Compare read paths on real shard bytes. No GPU, no inference.
+
+    Three disjoint tensor groups are read once each (cold if the OS has not
+    cached them) and then again (warm). Each run picks different tensors unless
+    a seed is given, so repeat runs stay mostly cold on a large checkpoint.
+    """
+    import random
+    from concurrent.futures import ThreadPoolExecutor
+    seed = int(time.time()) if seed is None else seed
+    pool = sorted((t for t in catalog.tensors.values() if t.size >= min_mib * 1024**2),
+                  key=lambda t: t.name)
+    random.Random(seed).shuffle(pool)
+    groups, target = [], total_mib * 1024**2
+    for _ in range(3):
+        group, size = [], 0
+        while pool and size < target:
+            group.append(pool.pop())
+            size += group[-1].size
+        groups.append(group)
+    if not all(groups):
+        raise SystemExit('Not enough large tensors for an I/O benchmark')
+
+    def serial(reader, group):
+        for item in group:
+            reader.read(item)
+
+    def threaded(reader, group):
+        with ThreadPoolExecutor(threads) as workers:
+            list(workers.map(lambda item: len(reader.read(item)), group))
+
+    cases = [('v0 mmap windows', RangeReader(mode='mmap'), serial),
+             ('direct reads, 1 thread', RangeReader(), serial),
+             (f'direct reads, {threads} threads', RangeReader(), threaded)]
+    rows = []
+    for (label, reader, run), group in zip(cases, groups):
+        size = sum(t.size for t in group)
+        row = dict(path=label, MB=round(size / 1e6, 1))
+        for phase in ('first_read', 'repeat_read'):
+            began = time.perf_counter()
+            run(reader, group)
+            row[phase + '_MBps'] = round(size / 1e6 / max(time.perf_counter() - began, 1e-9), 1)
+        reader.close()
+        rows.append(row)
+    cold = rows[1]['first_read_MBps']
+    if cold < 60:
+        verdict = ('First reads are under 60 MB/s even with large sequential requests. That is the ceiling of a '
+                   'USB 2.0 link: check that the drive is on a USB 3.x port with its original cable, not a hub.')
+    elif cold > 1500:
+        verdict = ('These first reads ran at memory speed, so the OS cache served them. Run again (a new seed picks '
+                   'other tensors) to measure the drive itself.')
+    elif rows[0]['first_read_MBps'] < 0.6 * cold:
+        verdict = 'The drive is fine; the old mmap path was the limit. Direct reads fix it.'
+    else:
+        verdict = 'Both paths read at similar speed here (possibly already cached). Re-run for fresh tensors.'
+    return dict(seed=seed, results=rows, verdict=verdict,
+                note='first_read may be served by the OS cache if those bytes were read recently; '
+                     'repeat_read normally is. MB = 1e6 bytes.')
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--model',default=r'G:\Models\DeepSeek-V4.1-Flash')
+    p.add_argument('--model',default=default_model_root())
     sub=p.add_subparsers(dest='command')
     sub.add_parser('inspect')
     sub.add_parser('self-test')
+    io_bench=sub.add_parser('bench-io',help='Measure drive read throughput: old mmap path vs direct reads')
+    io_bench.add_argument('--total-mib',type=int,default=384,help='Bytes read per case')
+    io_bench.add_argument('--threads',type=int,default=4)
+    io_bench.add_argument('--seed',type=int)
     bench=sub.add_parser('bench',help='Explicitly read selected weight payloads; no inference')
     bench.add_argument('--tensor',action='append',required=True)
     bench.add_argument('--device',default='cpu')
@@ -268,6 +466,9 @@ def main():
         result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(PrototypeTests))
         raise SystemExit(0 if result.wasSuccessful() else 1)
     catalog=Catalog(args.model)
+    if args.command=='bench-io':
+        if args.total_mib<16 or args.threads<1: p.error('Use --total-mib >= 16 and --threads >= 1')
+        print(json.dumps(bench_io(catalog,args.total_mib,args.threads,args.seed),indent=2)); return
     if args.command in (None,'inspect'):
         print(json.dumps(catalog.report(),indent=2)); return
     if args.rounds<1: p.error('--rounds must be positive')

@@ -10,7 +10,7 @@ def file_sha256(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 
 def provenance(model_root):
     folder=Path(__file__).parent
-    scripts=['frusium_loader.py','benchmark_layers.py','expert_correctness.py','streamed_moe.py','sparse_rows.py','block_primitives.py','layer0_block.py','reproducibility.py']
+    scripts=['frusium_loader.py','cache_policy.py','expert_cache.py','benchmark_layers.py','expert_correctness.py','streamed_moe.py','sparse_rows.py','block_primitives.py','layer0_block.py','reproducibility.py']
     return dict(python=sys.version,executable=sys.executable,platform=platform.platform(),
         torch=torch.__version__,cuda_runtime=torch.version.cuda,gpu=torch.cuda.get_device_name(0),
         matmul_tf32=torch.backends.cuda.matmul.allow_tf32,cudnn_tf32=torch.backends.cudnn.allow_tf32,

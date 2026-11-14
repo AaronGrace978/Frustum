@@ -1,6 +1,18 @@
-"""Run bounded, text-only chat with the local DeepSeek-V4.1-Flash checkpoint."""
+"""Run bounded, text-only chat with the local DeepSeek-V4.1-Flash checkpoint.
+
+v0.5 changes, none of which alter model arithmetic:
+- A placement plan keeps always-used weights (dense, routers, shared experts,
+  output head) resident on the GPU when they fit, instead of re-reading them
+  for every token. See placement.py. `--legacy` restores the v0.4 behaviour.
+- Routed experts go through a GPU tier, an optional host-RAM tier and threaded
+  disk reads (expert_cache.py).
+- A follow-up turn reuses the attention state of the previous turn when the
+  new prompt starts with exactly the tokens already processed.
+- Tokens stream as they are produced; sampling is available (greedy default).
+"""
 import argparse
 import json
+import os
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -10,8 +22,10 @@ import torch.nn.functional as F
 from tokenizers import Tokenizer
 
 from block_primitives import hc_pre
-from frusium_loader import Catalog, RangeReader
+from frusium_loader import Catalog, RangeReader, default_model_root
+from generation import drive, reusable_prefix
 from layers0_3_block import GIB, SequentialBlocks
+import placement
 
 
 class OutputHead:
@@ -25,14 +39,8 @@ class OutputHead:
     def read_chunk(self, start, count):
         head = self.tensor
         dim = head.shape[1]
-        payload = bytearray(count * dim * 2)
-        chunk = replace(head, offset=head.offset + start * dim * 2, size=len(payload))
-
-        def copy(offset, source):
-            payload[offset:offset + len(source)] = source
-
-        self.reader.copy(chunk, copy)
-        return torch.frombuffer(payload, dtype=torch.bfloat16).reshape(count, dim)
+        chunk = replace(head, offset=head.offset + start * dim * 2, size=count * dim * 2)
+        return torch.frombuffer(self.reader.read(chunk), dtype=torch.bfloat16).reshape(count, dim)
 
     def logits(self, x):
         rows, dim = self.tensor.shape
@@ -62,31 +70,66 @@ def chat_prompt(history, prompt):
     return text + f'<｜User｜>{prompt}<｜Assistant｜></think>'
 
 
+def make_sampler(temperature=0.0, top_k=0, top_p=1.0, seed=None):
+    """Greedy when temperature is 0 (the validated path); otherwise temperature/top-k/top-p sampling."""
+    if temperature <= 0:
+        return lambda logits: int(logits.argmax().item())
+    generator = torch.Generator()
+    if seed is not None:
+        generator.manual_seed(seed)
+
+    def pick(logits):
+        scores = logits.float().cpu() / temperature
+        if top_k:
+            kth = scores.topk(min(top_k, scores.numel())).values[-1]
+            scores = scores.masked_fill(scores < kth, float('-inf'))
+        probs = scores.softmax(-1)
+        if top_p < 1:
+            ordered, order = probs.sort(descending=True)
+            keep = ordered.cumsum(-1) - ordered < top_p
+            probs = torch.zeros_like(probs).scatter_(0, order, ordered * keep)
+        return int(torch.multinomial(probs, 1, generator=generator).item())
+    return pick
+
+
+class Session:
+    """Engine plus the exact token sequence its attention state currently covers."""
+    def __init__(self, engine, tokenizer, head, reuse=True):
+        self.engine, self.tokenizer, self.head, self.reuse = engine, tokenizer, head, reuse
+        self.eos = tokenizer.token_to_id('<｜end▁of▁sentence｜>')
+        self.fed = []
+
+    def readers(self):
+        engine = self.engine
+        return {'dense': engine.ops.loader.reader, 'experts': engine.moe.cache.reader,
+                'router': engine.moe.router.reader, 'rows': engine.lookup.reader}
+
+    def disk_bytes(self):
+        return sum(reader.bytes_read for reader in self.readers().values()) + self.head.reader.bytes_read
+
+
 @torch.inference_mode()
-def generate(engine, tokenizer, head, prompt, history, max_new_tokens, profile_decode=False):
-    ids = tokenizer.encode(chat_prompt(history, prompt), add_special_tokens=False).ids
+def generate(session, ids, max_new_tokens, pick, on_token=None, profile_decode=False, verbose=False):
+    """Generate up to max_new_tokens after the prompt token ids.
+
+    Returns (token_ids, timings, reused_prompt_tokens, stopped_at_eos).
+    """
+    engine, head = session.engine, session.head
     if len(ids) + max_new_tokens > engine.capacity:
         raise ValueError('Conversation exceeds the configured context capacity')
-    eos = tokenizer.token_to_id('<｜end▁of▁sentence｜>')
-    output = []
-    timings = []
-    start = 0
-    for _ in range(max_new_tokens):
+    readers = session.readers()
+    def run(tokens, phase, want_logits):
+        start = 0 if phase == 'prefill' else len(session.fed)
         step_started = time.perf_counter()
-        inputs = torch.tensor([ids], device='cuda', dtype=torch.long)
-        embeds = engine.lookup.get('embed.weight', ids)[None, :, None, :]
+        inputs = torch.tensor([tokens], device='cuda', dtype=torch.long)
+        embeds = engine.lookup.get('embed.weight', tokens)[None, :, None, :]
         hidden = embeds.repeat(1, 1, engine.cfg['hc_mult'], 1)
+
         def progress(done, total):
-            if done % 10 == 0 or done == total:
-                print(f'Processed {done}/{total} layers for token {len(output) + 1}', flush=True)
+            if (verbose or phase == 'prefill') and (done % 10 == 0 or done == total):
+                print(f'  {phase}: layer {done}/{total}', flush=True)
 
         layer_profile = []
-        readers = {
-            'dense': engine.ops.loader.reader,
-            'experts': engine.moe.cache.reader,
-            'router': engine.moe.router.reader,
-            'rows': engine.lookup.reader,
-        }
         layer_started = time.perf_counter()
         previous = {name: reader.bytes_read for name, reader in readers.items()}
 
@@ -109,41 +152,88 @@ def generate(engine, tokenizer, head, prompt, history, max_new_tokens, profile_d
         torch.cuda.synchronize()
         head_started = time.perf_counter()
         head_bytes_before = head.reader.bytes_read
-        x = engine.ops.norm(hc_pre(hidden[:, -1:], mix[:, -1:]), 'norm').float().flatten()
-        logits = head.logits(x)
-        if not torch.isfinite(logits).all():
-            raise RuntimeError('Output head produced nonfinite logits')
-        token = logits.argmax().item()
+        logits = None
+        if want_logits:
+            x = engine.ops.norm(hc_pre(hidden[:, -1:], mix[:, -1:]), 'norm').float().flatten()
+            logits = head.logits(x)
+            if not torch.isfinite(logits).all():
+                raise RuntimeError('Output head produced nonfinite logits')
         ended = time.perf_counter()
-        timings.append(dict(phase='prefill' if start == 0 else 'decode', token_id=token,
-                            backbone_seconds=head_started - step_started,
-                            output_head_seconds=ended - head_started,
-                            total_seconds=ended - step_started,
-                            head_logical_bytes=head.reader.bytes_read - head_bytes_before))
+        timing = dict(phase=phase, token_id=None, input_tokens=len(tokens),
+                      backbone_seconds=head_started - step_started,
+                      output_head_seconds=ended - head_started,
+                      total_seconds=ended - step_started,
+                      head_logical_bytes=head.reader.bytes_read - head_bytes_before)
         if layer_profile:
-            timings[-1]['layers'] = layer_profile
-        if token == eos:
-            break
-        output.append(token)
-        print(f'Generated token {len(output)}/{max_new_tokens} in {ended - step_started:.1f}s '
-              f'(head {ended - head_started:.2f}s)', flush=True)
-        start += len(ids)
-        ids = [token]
-    return tokenizer.decode(output, skip_special_tokens=True), output, timings
+            timing['layers'] = layer_profile
+        return logits, timing
+
+    reused = reusable_prefix(session.fed, ids) if session.reuse else 0
+    if reused:
+        print(f'  reusing {reused} processed tokens, adding {len(ids) - reused}', flush=True)
+    return drive(session.fed, ids, max_new_tokens, session.eos, pick, run, session.reuse, on_token)
+
+
+def build_plan(catalog, args, total, free):
+    cap = int(args.gpu_cap_gib * GIB)
+    notes = []
+    if free - int(1.5 * GIB) < cap:
+        cap = free - int(1.5 * GIB)
+        notes.append(f'Only {free / GIB:.1f} GiB of VRAM is free; GPU cap lowered to {cap / GIB:.1f} GiB.')
+    if cap < 6 * GIB:
+        raise SystemExit('Insufficient dedicated VRAM/headroom')
+    if args.legacy:
+        sizes = placement.measure(catalog)
+        head = 'streamed' if args.output_head == 'auto' else args.output_head
+        p = dict(gpu_cap_bytes=cap, reserve_bytes=0, dense='streamed', dense_cache_mib=256, head=head,
+                 head_bytes=sizes['head'] if head == 'resident' else 0, router_cache_mib=32,
+                 expert_cache_mib=args.expert_cache_mib or 256, pin_shared=False, gpu_policy='lru',
+                 host_policy='lru', host_cache_mib=0, sizes=sizes, notes=['Legacy v0.4 placement.'])
+    else:
+        try:
+            p = placement.plan(catalog, cap, reserve_bytes=int(args.reserve_gib * GIB), dense=args.dense,
+                               head=args.output_head, expert_cache_mib=args.expert_cache_mib,
+                               host_cache_gib=args.host_cache_gib)
+        except ValueError as error:
+            raise SystemExit(str(error))
+        if args.cache_policy != 'auto':
+            p['gpu_policy'] = args.cache_policy
+    p['notes'] = notes + p['notes']
+    return p
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--model', type=Path, default=Path(__file__).resolve().parent.parent)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--model', type=Path, default=Path(default_model_root()))
     parser.add_argument('--prompt', help='Run one prompt and exit. Omit for interactive chat.')
     parser.add_argument('--max-new-tokens', type=int, default=16)
     parser.add_argument('--context', type=int, default=256)
     parser.add_argument('--evidence', type=Path)
-    parser.add_argument('--output-head', choices=('resident', 'streamed'), default='streamed')
+    parser.add_argument('--output-head', choices=('auto', 'resident', 'streamed'), default='auto')
+    parser.add_argument('--dense', choices=('auto', 'resident', 'streamed'), default='auto',
+                        help='Keep dense weights on the GPU (resident) or re-read them per token (streamed)')
     parser.add_argument('--profile-decode', action='store_true',
                         help='Synchronize each decode layer and record time, logical reads and routing in evidence')
-    parser.add_argument('--expert-cache-mib', type=int, default=256,
-                        help='GPU budget for streamed experts across all layers')
+    parser.add_argument('--expert-cache-mib', type=int,
+                        help='GPU budget for packed experts. Default: whatever the placement plan leaves')
+    parser.add_argument('--host-cache-gib', default='auto',
+                        help='RAM tier for packed experts behind the GPU cache: a number, 0 to disable, or auto')
+    parser.add_argument('--gpu-cap-gib', type=float, default=12.0, help='PyTorch allocator cap')
+    parser.add_argument('--reserve-gib', type=float, default=2.0,
+                        help='Part of the cap kept free for activations and decode temporaries')
+    parser.add_argument('--io-threads', type=int, default=4, help='Background disk readers for experts; 0 disables')
+    parser.add_argument('--cache-policy', choices=('auto', 'lfu', 'lru'), default='auto',
+                        help='GPU expert eviction. auto picks lfu when the cache is smaller than one token needs')
+    parser.add_argument('--temperature', type=float, default=0.0, help='0 = greedy (default)')
+    parser.add_argument('--top-k', type=int, default=0)
+    parser.add_argument('--top-p', type=float, default=1.0)
+    parser.add_argument('--seed', type=int)
+    parser.add_argument('--top-logprobs', type=int, default=0,
+                        help='Record the K most likely tokens and their log-probabilities per step in --evidence')
+    parser.add_argument('--no-reuse', action='store_true', help='Re-prefill the whole conversation every turn')
+    parser.add_argument('--verbose', action='store_true', help='Per-token timing lines instead of streamed text')
+    parser.add_argument('--legacy', action='store_true',
+                        help='v0.4 behaviour for A/B runs: mmap reader, 256 MiB caches, streamed head, no reuse')
     args = parser.parse_args()
     if not 1 <= args.max_new_tokens < args.context <= 512:
         parser.error('Require 1 <= max-new-tokens < context <= 512')
@@ -151,21 +241,51 @@ def main():
         parser.error('--evidence requires --prompt and a new output file')
     if args.profile_decode and (not args.evidence or args.max_new_tokens < 2):
         parser.error('--profile-decode requires --evidence and at least two generated tokens')
-    if not 128 <= args.expert_cache_mib <= 6144:
-        parser.error('--expert-cache-mib must be between 128 and 6144')
+    if args.expert_cache_mib is not None and args.expert_cache_mib < 128:
+        parser.error('--expert-cache-mib must be at least 128')
+    if args.host_cache_gib != 'auto':
+        try:
+            if float(args.host_cache_gib) < 0:
+                raise ValueError
+        except ValueError:
+            parser.error('--host-cache-gib takes a nonnegative number or auto')
+    if args.temperature < 0 or args.top_k < 0 or not 0 < args.top_p <= 1 or args.io_threads < 0:
+        parser.error('Require temperature >= 0, top-k >= 0, 0 < top-p <= 1, io-threads >= 0')
+    if not 0 <= args.top_logprobs <= 20 or (args.top_logprobs and not args.evidence):
+        parser.error('--top-logprobs takes 0..20 and requires --evidence')
+    if args.gpu_cap_gib < 6 or args.reserve_gib < 0.5:
+        parser.error('Require --gpu-cap-gib >= 6 and --reserve-gib >= 0.5')
     if not torch.cuda.is_available():
         raise SystemExit('CUDA required')
+    if args.legacy:
+        os.environ['FRUSIUM_READER'] = 'mmap'
     free, total = torch.cuda.mem_get_info()
-    if total < 14 * GIB or free < 3 * GIB:
-        raise SystemExit('Insufficient dedicated VRAM/headroom')
-    torch.cuda.set_per_process_memory_fraction(12 * GIB / total)
+    catalog = Catalog(args.model)
+    plan = build_plan(catalog, args, total, free)
+    print(placement.describe(plan), flush=True)
+    torch.cuda.set_per_process_memory_fraction(min(1.0, plan['gpu_cap_bytes'] / total))
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
-    catalog = Catalog(args.model)
     tokenizer = Tokenizer.from_file(str(args.model / 'tokenizer.json'))
-    head = OutputHead(catalog.tensors['head.weight'], resident=args.output_head == 'resident')
-    engine = SequentialBlocks(catalog, args.context, 256, args.expert_cache_mib,
-                               catalog.config['text_config']['num_hidden_layers'])
+    head = OutputHead(catalog.tensors['head.weight'], resident=plan['head'] == 'resident')
+    moe_options = dict(host_cache_mib=plan['host_cache_mib'], router_cache_mib=plan['router_cache_mib'],
+                       io_threads=0 if args.legacy else args.io_threads, gpu_policy=plan['gpu_policy'],
+                       host_policy=plan['host_policy'], pin_shared=plan['pin_shared'],
+                       cap_bytes=plan['gpu_cap_bytes'])
+    engine = SequentialBlocks(catalog, args.context, plan['dense_cache_mib'], plan['expert_cache_mib'],
+                              catalog.config['text_config']['num_hidden_layers'], moe_options)
+    session = Session(engine, tokenizer, head, reuse=not (args.no_reuse or args.legacy))
+    sample = make_sampler(args.temperature, args.top_k, args.top_p, args.seed)
+    distributions = []
+
+    def pick(logits):
+        token = sample(logits)
+        if args.top_logprobs:
+            logprobs = logits.float().log_softmax(-1)
+            best = logprobs.topk(args.top_logprobs)
+            distributions.append(dict(token_id=token, logprob=float(logprobs[token]),
+                                      top=[[int(i), float(v)] for i, v in zip(best.indices.tolist(), best.values.tolist())]))
+        return token
     history = []
     try:
         while True:
@@ -176,37 +296,95 @@ def main():
                     prompt = input('You: ')
                 except (EOFError, KeyboardInterrupt):
                     break
-                if prompt.strip() == '/quit':
+                command = prompt.strip()
+                if command == '/quit':
                     break
-                if not prompt.strip():
+                if command == '/reset':
+                    history.clear()
+                    session.fed = []
+                    print('Conversation cleared.')
                     continue
-            print('Generating with the local checkpoint...', flush=True)
+                if command == '/stats':
+                    print(json.dumps(dict(expert_cache=engine.moe.cache.stats(), dense=engine.ops.loader.stats(),
+                                          memory=engine.memory()), indent=2))
+                    continue
+                if not command:
+                    continue
+            prompt_text = chat_prompt(history, prompt)
+            ids = tokenizer.encode(prompt_text, add_special_tokens=False).ids
+            distributions.clear()
             torch.cuda.reset_peak_memory_stats()
+            cache = engine.moe.cache
+            before = dict(disk=session.disk_bytes(), requests=cache.requests, gpu=cache.hits,
+                          host=cache.host_hits, read=cache.disk_reads)
+            shown, opened = 0, False
+
+            def on_token(output, timing):
+                nonlocal shown, opened
+                if args.verbose:
+                    print(f'Generated token {len(output)}/{args.max_new_tokens} in {timing["total_seconds"]:.1f}s '
+                          f'(head {timing["output_head_seconds"]:.2f}s)', flush=True)
+                    return
+                text = tokenizer.decode(output, skip_special_tokens=True)
+                if not text.endswith('\ufffd'):  # wait for the rest of a multi-token character
+                    print(('' if opened else 'Assistant: ') + text[shown:], end='', flush=True)
+                    shown, opened = len(text), True
+
+            print('Generating with the local checkpoint...', flush=True)
             started = time.perf_counter()
             try:
-                reply, tokens, timings = generate(engine, tokenizer, head, prompt, history,
-                                                  args.max_new_tokens, args.profile_decode)
+                tokens, timings, reused, stopped = generate(session, ids, args.max_new_tokens, pick, on_token,
+                                                            args.profile_decode, args.verbose)
             except ValueError as error:
                 if args.prompt is not None:
                     raise
                 print(error)
                 continue
-            print(f'Assistant: {reply}', flush=True)
+            seconds = time.perf_counter() - started
+            reply = tokenizer.decode(tokens, skip_special_tokens=True)
+            print(('' if opened else 'Assistant: ') + reply[shown:], flush=True)
+            decode = [t['total_seconds'] for t in timings if t['phase'] == 'decode']
+            first = sum(t['total_seconds'] for t in timings if t['phase'] != 'decode')
+            requests = max(cache.requests - before['requests'], 1)
+            summary = dict(
+                generated_tokens=len(tokens), prompt_tokens=len(ids), reused_prompt_tokens=reused,
+                stopped_at_eos=stopped, first_token_seconds=first,
+                mean_decode_seconds=sum(decode) / len(decode) if decode else None,
+                disk_bytes=session.disk_bytes() - before['disk'],
+                expert_requests=cache.requests - before['requests'],
+                expert_gpu_hits=cache.hits - before['gpu'], expert_host_hits=cache.host_hits - before['host'],
+                expert_disk_reads=cache.disk_reads - before['read'])
+            rate = f'{summary["mean_decode_seconds"]:.1f} s/token' if decode else 'no decode steps'
+            print(f'[{len(tokens)} tokens, first after {first:.1f}s, then {rate}; '
+                  f'{reused}/{len(ids)} prompt tokens reused; disk {summary["disk_bytes"] / 1e9:.2f} GB; experts '
+                  f'{100 * summary["expert_gpu_hits"] / requests:.0f}% GPU, '
+                  f'{100 * summary["expert_host_hits"] / requests:.0f}% RAM, '
+                  f'{100 * summary["expert_disk_reads"] / requests:.0f}% disk]', flush=True)
             if args.evidence:
                 with args.evidence.open('x', encoding='utf-8') as handle:
-                    json.dump(dict(prompt=prompt, reply=reply, token_ids=tokens,
-                                   layers=len(engine.blocks), seconds=time.perf_counter() - started,
+                    json.dump(dict(prompt=prompt, prompt_text=prompt_text, prompt_token_ids=ids,
+                                   reply=reply, token_ids=tokens,
+                                   layers=len(engine.blocks), seconds=seconds,
                                    peak_allocated_GiB=torch.cuda.max_memory_allocated() / GIB,
                                    peak_reserved_GiB=torch.cuda.max_memory_reserved() / GIB,
-                                   output_head_mode=args.output_head,
-                                   expert_cache_mib=args.expert_cache_mib,
+                                   output_head_mode=plan['head'],
+                                   expert_cache_mib=plan['expert_cache_mib'],
                                    output_head_logical_bytes=sum(t['head_logical_bytes'] for t in timings),
+                                   summary=summary,
+                                   placement={k: v for k, v in plan.items() if k != 'sizes'},
+                                   checkpoint_sizes=plan['sizes'],
+                                   sampling=dict(temperature=args.temperature, top_k=args.top_k,
+                                                 top_p=args.top_p, seed=args.seed),
+                                   legacy=args.legacy, io_threads=moe_options['io_threads'],
+                                   expert_cache=cache.stats(), dense_cache=engine.ops.loader.stats(),
+                                   top_logprobs=distributions,
                                    token_timings=timings), handle, indent=2)
             if args.prompt is not None:
                 break
             history.append((prompt, reply))
     finally:
         engine.close()
+        head.reader.close()
 
 
 if __name__ == '__main__':
