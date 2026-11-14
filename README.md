@@ -2,7 +2,7 @@
 
 Streaming inference for checkpoints far larger than GPU memory. The reference target is DeepSeek-V4.1-Flash (about 510 GB on disk) on one 16 GB GPU, read from an external SSD.
 
-Current code: v0.5. The numbers under "History and recorded evidence" were measured with v0.4 and have not been re-measured. Run the verification step below to get v0.5 numbers for this machine.
+Current code: v0.5.1. The numbers under "History and recorded evidence" were measured with v0.4 and have not been re-measured. Run the verification step below to get current numbers for this machine.
 
 ## Quick start
 
@@ -73,14 +73,33 @@ In chat: `/reset` clears the conversation, `/stats` prints cache counters, `/qui
 
 `.\run_verify.ps1` runs four steps and writes everything to `verify_runs\<timestamp>\`:
 
-1. `selftest.py`: 26 unit tests on a synthetic checkpoint. No GPU or weights.
+1. `selftest.py`: 28 unit tests on a synthetic checkpoint, including the chat template against DeepSeek's own encoder. No GPU or weights.
 2. `bench-io`: the drive check above.
 3. `layer0_block.py`: the layer-0 output hash, routing and stage fingerprints must equal `repro_baseline.json`, recorded with v0.4. This is the proof that v0.5 did not change arithmetic.
 4. `frusium_chat.py --prompt "Say hello."` for six tokens: token ids must equal the saved v0.4 run, and the timings are listed beside it.
 
 `run_repro_test.ps1` will report `same_source: false` against the old baseline because the sources changed. The other checks in it should still pass.
 
-Status of the v0.5 code as delivered: the reader, cache policy, expert cache, placement planner and generation control flow pass their unit tests on CPU. The GPU path has not been executed since the changes. Step 3 and step 4 are that test.
+Status of the code as committed: the reader, cache policy, expert cache, placement planner, generation control flow and chat template pass their unit tests on CPU. The GPU path has not been executed since v0.4. Step 3 and step 4 are that test.
+
+Each change is its own commit, so a failure can be localised:
+
+    git log --oneline
+    git revert <commit>        # undo one change and re-run verify
+
+Two switches do the same without touching history: `FRUSIUM_ATTENTION=loop` restores the original attention loop for prefill, and `--legacy` restores the v0.4 placement and reader.
+
+## What v0.5.1 added
+
+| Change | Effect on arithmetic |
+|---|---|
+| Chat template checked against `encoding/encoding.py` (identical in chat mode); `--system` | None |
+| FP4 expert decode through a byte-pair table, block scales applied in place | Bit-identical; `decoder_test` asserts it on the GPU at start-up |
+| Batched sparse attention for prefill; decode keeps the original loop | Prefill may differ in the last bit |
+| GLM backend on the shared tiered cache with read-ahead | None |
+| `long_context_check.py` / `run_long_context.ps1` | New test: prefill vs decode schedules past the 128-token window |
+
+`layer0_block.py` deliberately stays a separate implementation. It duplicates code from the main engine, but that is what makes the layer-0 hash an independent cross-check instead of the engine agreeing with itself.
 
 ## Is the output right?
 
@@ -93,7 +112,7 @@ See the script header for caveats about chat templates and provider quantization
 
 ## Baseline for the GGUF backends
 
-`phi4_chat.py` and `glm_chat.py` are unchanged apart from inheriting the faster reader. Both models fit on a 16 GB card, where llama.cpp is the standard to compare against, and their saved decode speed here is about 1.4 s per token. That cost is per-use dequantization in PyTorch, which the loader changes do not touch. `baseline_llamacpp.py` runs `llama-bench` on the same file and prints both figures.
+`phi4_chat.py` is unchanged apart from inheriting the faster reader; `glm_chat.py` now also uses the shared tiered cache. Both models fit on a 16 GB card, where llama.cpp is the standard to compare against, and their saved decode speed here is about 1.4 s per token. That cost is per-use dequantization in PyTorch, which the loader changes do not touch. `baseline_llamacpp.py` runs `llama-bench` on the same file and prints both figures.
 
 ## Modules
 
@@ -103,13 +122,12 @@ See the script header for caveats about chat templates and provider quantization
 | `cache_policy.py` | Frequency ranking, tier bookkeeping, replay simulator (no torch) |
 | `expert_cache.py` | GPU + host tiers and threaded reads for routed experts |
 | `placement.py` | What stays resident, from checkpoint metadata |
-| `generation.py` | Prefill / reuse / decode control flow (no torch) |
+| `generation.py` | Chat template and prefill / reuse / decode control flow (no torch) |
 | `streamed_moe.py`, `layers0_3_block.py`, `layer0_block.py`, `block_primitives.py`, `sparse_rows.py`, `expert_correctness.py` | Model arithmetic and its tests |
 | `frusium_chat.py` | Chat runner |
 | `decode_cache_replay.py` | Replay recorded routing through cache policies and tier sizes |
-| `verify_upgrade.py`, `selftest.py`, `reference_parity.py`, `baseline_llamacpp.py` | Verification |
+| `verify_upgrade.py`, `selftest.py`, `long_context_check.py`, `reference_parity.py`, `baseline_llamacpp.py` | Verification |
 | `benchmark_layers.py` | Original synthetic transfer benchmark, kept with its v0 cache |
-| `backup_v0.4/` | Files as they were before v0.5 |
 
 ---
 
