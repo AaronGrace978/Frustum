@@ -1,0 +1,355 @@
+{
+  "status": "PASS",
+  "scope": "Sequential complete text blocks 0--3 only; no head, generation, or later source-sharing schedule",
+  "attention_schedule": {
+    "layers_0_1": "sliding-window raw KV",
+    "layer_1": "Engram applied before Block 1",
+    "layer_2": "2:1 compressor and index source",
+    "layer_3": "consumes layer-2 shared compressed KV/index selections"
+  },
+  "checkpoint_attention_source": "local inference/model.py Attention, Compressor, Indexer, Block, and Transformer.forward inspected before implementation",
+  "token_ids": [
+    100,
+    200,
+    300
+  ],
+  "output_shape": [
+    1,
+    3,
+    4,
+    5120
+  ],
+  "output_sha256": "f8693ef75483432be8c5ccfac5deefa85458e81f0ad65f59726c68f8bd81a154",
+  "tokenizer_compressed_vocab_size": 99092,
+  "primitive_tests": [
+    "sparse attention NumPy oracle",
+    "causal future-token masking",
+    "KV ring wraparound",
+    "YaRN RoPE inverse",
+    "compressed FP4 quantization finite"
+  ],
+  "full_prefill_trace": [
+    {
+      "input": "f804c6f3b7cd6ac721b49dc518b99e3bcf35e4d474612bc53497d7983a911ff3",
+      "attention_output": "5d59ea709ec9505f2f6a6c69fd0629d6992c2dd1f29ed31810a3766113b53203",
+      "attention_residual": "e900a29aa91ceee28a8f5a090ca50dd16981b69c7179a7a6ac28317970e7c4a5",
+      "moe_input": "010784d78e10dbd05e38df88d0ea165bed6ff1bb0fd1b772f1b5113ccbcb0152",
+      "output": "d44cac9d28778735d3c1339ed98b44745c53e81f6a8b0440496cd0e7dc5ab9b4"
+    },
+    {
+      "input": "ec83b2aa04c9362c956695964eed0c3e2fb04d0f239818ffbe31193228a1cd20",
+      "attention_output": "e0d15f40180aec342446230b0731fee2be96964b8ea96c39ee0d4f85e95ddbe1",
+      "attention_residual": "d14101ab2e5f78903e9c05e7f71135f23ac40a286674c96693f2d64d84cb10d7",
+      "moe_input": "6db6719c82d15fa832791c1f3cc8a746055eaa939246a00e77d6c8c4b61f5b08",
+      "output": "9fdb5e103c9305e99d54c9048df214437f06167cdac054ba752912ff13d8070a"
+    },
+    {
+      "input": "9fdb5e103c9305e99d54c9048df214437f06167cdac054ba752912ff13d8070a",
+      "attention_output": "353f8b2b2e406d805eefd529d9800b642c78822c67ec9e9ae533415f4eadc457",
+      "attention_residual": "babf8098277abe77cb70e7c19b3744156f04eddab4fc505b4186ef060402a722",
+      "moe_input": "d4ae456e39bfddcd5408d94b0a8db85e3cb801bda9f0b002623d98a1db576c7a",
+      "output": "d3ee911b2f3de0ac23b5e550de579e629aa83b120db946f58ed8b409c6d4421a"
+    },
+    {
+      "input": "d3ee911b2f3de0ac23b5e550de579e629aa83b120db946f58ed8b409c6d4421a",
+      "attention_output": "8a8215a3d5778267468d7c183b262b3ab754d3a6c706f2d2ed8c9f9bd92c600a",
+      "attention_residual": "07f018fa66ab61aee472f55db3975287e4991f92ca720027008c812f0d3e816d",
+      "moe_input": "efa89400801ad463df4e302e3b992e45dd4ae35c2f5dc09f5d0f81017d33fc4d",
+      "output": "f8693ef75483432be8c5ccfac5deefa85458e81f0ad65f59726c68f8bd81a154"
+    }
+  ],
+  "full_prefill_moe": [
+    {
+      "layer": 0,
+      "selected_experts": [
+        [
+          226,
+          21,
+          94,
+          251,
+          163,
+          206
+        ],
+        [
+          206,
+          372,
+          359,
+          158,
+          226,
+          233
+        ],
+        [
+          94,
+          206,
+          105,
+          361,
+          307,
+          226
+        ]
+      ],
+      "routing_weights": [
+        [
+          0.4220617711544037,
+          0.34518101811408997,
+          0.20923027396202087,
+          0.18190893530845642,
+          0.1658191829919815,
+          0.17579884827136993
+        ],
+        [
+          0.38548269867897034,
+          0.24419209361076355,
+          0.22987893223762512,
+          0.22467640042304993,
+          0.21082204580307007,
+          0.2049478143453598
+        ],
+        [
+          0.37133878469467163,
+          0.38103997707366943,
+          0.1903049349784851,
+          0.19160489737987518,
+          0.18421286344528198,
+          0.18149849772453308
+        ]
+      ],
+      "unique_routed_experts": 13,
+      "shared_expert": true,
+      "relative_L2_error": 0.0,
+      "cosine_similarity": 1.0,
+      "max_abs_error": 0.0
+    },
+    {
+      "layer": 1,
+      "selected_experts": [
+        [
+          278,
+          30,
+          229,
+          271,
+          361,
+          160
+        ],
+        [
+          327,
+          372,
+          369,
+          317,
+          30,
+          75
+        ],
+        [
+          303,
+          372,
+          264,
+          15,
+          317,
+          207
+        ]
+      ],
+      "routing_weights": [
+        [
+          0.3006223440170288,
+          0.2726515233516693,
+          0.2445196509361267,
+          0.23610994219779968,
+          0.23598241806030273,
+          0.21011415123939514
+        ],
+        [
+          0.35090020298957825,
+          0.2980632185935974,
+          0.25518059730529785,
+          0.20128577947616577,
+          0.18443875014781952,
+          0.21013140678405762
+        ],
+        [
+          0.2687048614025116,
+          0.2587687075138092,
+          0.2775656282901764,
+          0.24219223856925964,
+          0.23181220889091492,
+          0.22095632553100586
+        ]
+      ],
+      "unique_routed_experts": 15,
+      "shared_expert": true,
+      "relative_L2_error": 0.0,
+      "cosine_similarity": 1.0,
+      "max_abs_error": 0.0
+    },
+    {
+      "layer": 2,
+      "selected_experts": [
+        [
+          57,
+          42,
+          187,
+          342,
+          283,
+          272
+        ],
+        [
+          25,
+          358,
+          298,
+          222,
+          272,
+          132
+        ],
+        [
+          222,
+          298,
+          132,
+          272,
+          213,
+          358
+        ]
+      ],
+      "routing_weights": [
+        [
+          0.26389986276626587,
+          0.2583777904510498,
+          0.24550902843475342,
+          0.24774155020713806,
+          0.2425575852394104,
+          0.24191419780254364
+        ],
+        [
+          0.29477930068969727,
+          0.27473872900009155,
+          0.2558961510658264,
+          0.24625732004642487,
+          0.2192276120185852,
+          0.20910102128982544
+        ],
+        [
+          0.33472710847854614,
+          0.2646620273590088,
+          0.23784974217414856,
+          0.23204851150512695,
+          0.21625976264476776,
+          0.21445289254188538
+        ]
+      ],
+      "unique_routed_experts": 12,
+      "shared_expert": true,
+      "relative_L2_error": 0.0,
+      "cosine_similarity": 1.0,
+      "max_abs_error": 0.0
+    },
+    {
+      "layer": 3,
+      "selected_experts": [
+        [
+          222,
+          86,
+          306,
+          111,
+          245,
+          149
+        ],
+        [
+          334,
+          161,
+          180,
+          287,
+          130,
+          222
+        ],
+        [
+          222,
+          86,
+          306,
+          174,
+          130,
+          161
+        ]
+      ],
+      "routing_weights": [
+        [
+          0.5599424242973328,
+          0.21994417905807495,
+          0.19332346320152283,
+          0.18880502879619598,
+          0.17052696645259857,
+          0.16745787858963013
+        ],
+        [
+          0.29593655467033386,
+          0.2513856887817383,
+          0.24943315982818604,
+          0.24345922470092773,
+          0.23687174916267395,
+          0.2229136973619461
+        ],
+        [
+          0.42665672302246094,
+          0.2522728741168976,
+          0.21057584881782532,
+          0.20795975625514984,
+          0.20853257179260254,
+          0.19400224089622498
+        ]
+      ],
+      "unique_routed_experts": 12,
+      "shared_expert": true,
+      "relative_L2_error": 3.3266592254221905e-06,
+      "cosine_similarity": 1.0,
+      "max_abs_error": 3.0517578125e-05
+    }
+  ],
+  "full_prefill_vs_prefix_decode_relative_L2": 6.23715968686156e-05,
+  "max_abs_prefill_decode_difference": 0.0009765625,
+  "correctness_checks": {
+    "moe": "Per-layer NumPy FP64 routing/matrix-product references passed",
+    "attention": "Tiny NumPy sparse-attention oracle plus causal masking passed",
+    "schedule": "Full prefill versus prefix+decode agrees within 0.02 rtol / 0.01 atol"
+  },
+  "memory_full_prefill": {
+    "allocated_GiB": 0.487912654876709,
+    "reserved_GiB": 3.02734375,
+    "dense_cache_MiB": 216.58282852172852,
+    "dense_cache_budget_MiB": 256.0,
+    "expert_cache_MiB": 248.939208984375,
+    "expert_cache_budget_MiB": 256.0
+  },
+  "memory_after_schedule": {
+    "allocated_GiB": 0.4876699447631836,
+    "reserved_GiB": 3.0390625,
+    "dense_cache_MiB": 216.45660781860352,
+    "dense_cache_budget_MiB": 256.0,
+    "expert_cache_MiB": 246.86279296875,
+    "expert_cache_budget_MiB": 256.0
+  },
+  "dense_cache_stats": {
+    "hits": 0,
+    "misses": 285,
+    "evictions": 246,
+    "payload_bytes_read": 2089365536,
+    "cache_bytes": 226971204,
+    "peak_cache_bytes": 267100080,
+    "budget_bytes": 268435456,
+    "staging_bytes": 8388608
+  },
+  "expert_cache_stats": {
+    "payload_bytes_read": 2662364160,
+    "cache_bytes": 258854400,
+    "budget_bytes": 268435456,
+    "evictions": 119,
+    "requests": 131,
+    "hits": 119
+  },
+  "sparse_row_stats": {
+    "payload_bytes_read": 49728,
+    "cache_bytes": 67584,
+    "requests": 147,
+    "hits": 72
+  },
+  "logical_weight_read_MB": 4767.514208,
+  "peak_allocated_GiB": 2.254128932952881,
+  "peak_reserved_GiB": 3.0390625,
+  "seconds_including_CPU_validation": 111.99977319999971,
+  "caveat": "The eager attention/compressed-activation implementation follows supplied scheduling/equations but is not TileLang kernel parity. Full-sequence agreement compares two schedules of this implementation; long-context sparse-selection and all later layers remain unvalidated."
+}

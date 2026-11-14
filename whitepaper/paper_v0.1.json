@@ -1,0 +1,377 @@
+[
+  {
+    "title": "Frusium_loader",
+    "subtitle": "A bounded working-set prototype for SSD-backed mixture-of-experts execution",
+    "body": [
+      [
+        "p",
+        "Technical whitepaper | Version 0.1 | November 13, 2026"
+      ],
+      [
+        "p",
+        "Project concept and direction: Aaron Grace. Prototype implementation and analysis developed with ChatGPT assistance. Experimental engineering report; not peer reviewed."
+      ],
+      [
+        "h",
+        "Abstract"
+      ],
+      [
+        "p",
+        "Frusium_loader investigates whether a large, sparsely activated model can be executed by moving only the immediately needed weights from an external SSD into a small GPU working set. The motivating analogy is spatial streaming in games: retain nearby resources, fetch upcoming resources, and retire completed ones. Here the working set is defined by the model’s computation and router decisions, rather than by a camera. The analogy is conceptual; no claim is made about a particular game’s implementation."
+      ],
+      [
+        "p",
+        "The prototype uses a locally stored DeepSeek-V4.1-Flash checkpoint, Python, and PyTorch on an NVIDIA GeForce RTX 5060 Ti 16 GB. It catalogs safetensors metadata without reading weight payloads, streams bounded byte ranges through pinned host buffers, maintains a GPU LRU cache, and computes selected FP4 experts plus an FP8 shared expert. Sparse row lookup avoids materializing enormous Engram tables."
+      ],
+      [
+        "p",
+        "Four independent MoE sublayers, numbered 0 through 3, passed tests on two synthetic input vectors each. Final BF16 outputs matched a CPU reference on those inputs. The latest run requested 1,059.86 MB of weight payloads, performed 39 cache evictions, and reached 0.5254 GiB of peak PyTorch-reserved GPU memory. These results demonstrate tested component execution, not full-model inference, language quality, or generation speed."
+      ],
+      [
+        "h",
+        "What this paper establishes"
+      ],
+      [
+        "p",
+        "Measured: metadata inspection, bounded transfers, real routing, selected and shared expert computation, sparse row access, and residual primitives. Proposed: extending this foundation into complete transformer blocks and then a short-context text-generation loop. Not established: native FP4 kernel performance, sustained SSD bandwidth, cross-layer expert prediction, original TileLang parity, or a 40-layer generation result."
+      ]
+    ]
+  },
+  {
+    "title": "1. Target checkpoint and constraints",
+    "body": [
+      [
+        "p",
+        "The source of truth is the local folder G:/Models/DeepSeek-V4.1-Flash. Configuration, index entries, safetensors headers, and selected supplied inference code were inspected. The folder’s model name and publisher claims were not independently authenticated; this report describes these local files. [L1–L3]"
+      ],
+      [
+        "table",
+        [
+          [
+            "Property",
+            "Observed value"
+          ],
+          [
+            "Architecture class",
+            "DeepseekV41ForCausalLM"
+          ],
+          [
+            "Text backbone",
+            "40 layers; hidden dimension 5,120"
+          ],
+          [
+            "MoE configuration",
+            "384 routed experts; top-6; one shared expert"
+          ],
+          [
+            "Expert intermediate dimension",
+            "2,304"
+          ],
+          [
+            "Attention configuration",
+            "64 heads; head dimension 512; window 128"
+          ],
+          [
+            "Checkpoint packaging",
+            "48 shards; 96,085 indexed tensors"
+          ],
+          [
+            "Tensor payload bytes",
+            "510,286,023,000 (510.286 decimal GB)"
+          ],
+          [
+            "Stored formats",
+            "BF16, F32, FP8 E4M3, E8M0, packed FP4 in I8"
+          ]
+        ]
+      ],
+      [
+        "p",
+        "The local model card describes a 20-layer causal encoder followed by a 20-layer decoder, compressed sparse attention, Engram memory, vision input, and DSpark. It reports rounded active-parameter figures of 8B for prefill and 16B for decode. These are model-card claims, not independently derived execution counts."
+      ],
+      [
+        "h",
+        "Expert-size accounting"
+      ],
+      [
+        "p",
+        "One three-projection expert contains 3 × 5,120 × 2,304 = 35,389,440 logical weight parameters. Its three FP4 matrices occupy 17,694,720 bytes; per-32 E8M0 scales add 1,105,920 bytes, for 18,800,640 bytes total. Six routed experts therefore require 112,803,840 bytes per layer if none are cached. This excludes the shared expert, router, attention, and all other state."
+      ],
+      [
+        "h",
+        "Operating envelope"
+      ],
+      [
+        "p",
+        "The user’s target is a 16 GB RTX 5060 Ti with weights on a T7 USB-attached SSD. The configured 12 GiB limit applies to PyTorch’s caching allocator. The weight-cache allocation path also checks for 2 GiB of free device memory. Driver allocations and other processes are outside that budget; a Python setting cannot categorically prevent Windows shared-memory use. CPU staging, OS page cache, and validation buffers also consume host RAM."
+      ]
+    ]
+  },
+  {
+    "title": "2. Storage and scheduling design",
+    "body": [
+      [
+        "h",
+        "Catalog first; payload only on demand"
+      ],
+      [
+        "p",
+        "Catalog reads config.json, model.safetensors.index.json, and each shard’s length-prefixed JSON header. It validates index/header agreement, tensor extents, and shard paths, then records each tensor’s file, byte offset, shape, dtype, and size. The initial scan read 10,685,312 header bytes and zero tensor payload bytes. A shard is a storage container, not a scheduling unit."
+      ],
+      [
+        "h",
+        "Bounded transfer path"
+      ],
+      [
+        "p",
+        "RangeReader maps allocation-aligned read-only windows and consumes a bounded portion of each mapping. The GPU cache uses two 8 MiB pinned CPU buffers. A copy stream transfers chunks while a separate stream runs GPU operations. An event guards each host buffer before reuse; entry events protect GPU storage until the relevant computation completes. Pinned here refers to page-locked host RAM. GPU entries are ordinary resident CUDA allocations governed by the LRU policy. [W2]"
+      ],
+      [
+        "table",
+        [
+          [
+            "Stage",
+            "Responsibility"
+          ],
+          [
+            "SSD / OS file cache",
+            "Supply requested tensor or row ranges"
+          ],
+          [
+            "Pinned host staging",
+            "Hold two bounded transfer chunks"
+          ],
+          [
+            "CUDA copy stream",
+            "Move packed bytes and publish readiness events"
+          ],
+          [
+            "GPU LRU",
+            "Retain hot entries and evict eligible old entries"
+          ],
+          [
+            "CUDA compute stream",
+            "Wait for readiness, decode, and execute"
+          ],
+          [
+            "Completion event",
+            "Permit safe buffer and cache reuse"
+          ]
+        ]
+      ],
+      [
+        "h",
+        "Prefetch without changing the answer"
+      ],
+      [
+        "p",
+        "After a router has selected its experts, the next selected expert is known exactly. The implementation dispatches current-expert computation and then prepares that next expert while protecting both cache entries. A miss must fetch the selected expert; substituting an available expert would change the model. Predicting a later layer’s routing decision is not implemented."
+      ],
+      [
+        "p",
+        "Separate streams create an opportunity for overlap, not proof of a speedup. CPU reads, validation synchronization, allocator behavior, and the current decode routines can limit overlap. A profiler trace and controlled prefetch-off comparison are needed before claiming latency improvements. The checksum benchmark’s fixed expert sequence is explicitly synthetic."
+      ]
+    ]
+  },
+  {
+    "title": "3. Numerical implementation",
+    "body": [
+      [
+        "h",
+        "Packed weights and activation conversion"
+      ],
+      [
+        "p",
+        "Routed expert bytes contain two E2M1 values: the low nibble is the even column and the high nibble is the odd column. Magnitudes are {0, 0.5, 1, 1.5, 2, 3, 4, 6}, with a sign bit. One E8M0 scale applies to each group of 32 columns. Finite scale byte e represents 2^(e−127); 255 is rejected. The format agrees with NVIDIA’s documented MXFP4 packing. [W1]"
+      ],
+      [
+        "p",
+        "The correctness path decodes one matrix at a time to FP32 and performs ordinary matrix multiplication. Inputs are rounded to FP8 E4M3 with per-32 power-of-two scales following the supplied activation-quantization code, and projection outputs are rounded to BF16. This is not native FP4 Tensor Core execution. The shared expert uses FP8 matrices with per-32×32 E8M0 block scales."
+      ],
+      [
+        "h",
+        "Routing and expert combination"
+      ],
+      [
+        "p",
+        "The text router computes sqrt(softplus(xWᵀ)), adds the correction bias only for top-k selection, gathers the six unbiased scores, normalizes their sum, and multiplies by the configured route scale of 1.5. Consequently the six mixture weights sum approximately to 1.5, not 1. Image-routing bias is not exercised by the current text-only tests."
+      ],
+      [
+        "p",
+        "For each selected expert, gate = W1x and up = W3x. The gate branch is clamped above at 10; the up branch is clamped to [−10, 10]. The hidden vector is SiLU(gate) × up. Its routing coefficient is applied before BF16 rounding and W2, as in the supplied implementation. Expert outputs accumulate in FP32, the shared expert is added, and the combined output is returned in BF16. [L3]"
+      ],
+      [
+        "h",
+        "Sparse tables and residual mixing"
+      ],
+      [
+        "p",
+        "SparseRows fetches only selected rows from BF16 token embeddings or FP8/E8M0 Engram tables. It caches decoded rows and checks indices and layouts. Full token-to-ngram hashing and Engram gating are not yet connected. RMSNorm and mHC coefficient generation, Sinkhorn normalization, collapse, and expansion are implemented separately. The residual mixing matrix is interpreted as [source, destination], matching the supplied block code."
+      ]
+    ]
+  },
+  {
+    "title": "4. Experimental results",
+    "body": [
+      [
+        "p",
+        "Environment: Windows PowerShell 5.1, RTX 5060 Ti 16 GB, Python 3.13, and torch 2.11.0+cu128 in an isolated environment. A CPU-only PyTorch installation was replaced for this project by a CUDA-enabled environment; a direct CUDA computation verified device access. No model weights were modified."
+      ],
+      [
+        "table",
+        [
+          [
+            "Experiment",
+            "Observed result"
+          ],
+          [
+            "Single expert: layer 0 / expert 0",
+            "PASS; zero, normal and 8×-normal inputs"
+          ],
+          [
+            "Single-expert output",
+            "Final BF16 output exactly matched reference"
+          ],
+          [
+            "Single-expert I/O / reserved VRAM",
+            "18.80064 MB / 0.158203 GiB"
+          ],
+          [
+            "MoE sublayers 0–3",
+            "PASS; two synthetic inputs per sublayer"
+          ],
+          [
+            "Real expert selection",
+            "12 distinct routed experts per tested layer + shared"
+          ],
+          [
+            "MoE logical reads / evictions",
+            "1,059.861504 MB / 39"
+          ],
+          [
+            "MoE peak allocated / reserved",
+            "0.414290 / 0.525391 GiB"
+          ],
+          [
+            "MoE cache hits incl. prefetch",
+            "48 / 52 requests (92.31%)"
+          ],
+          [
+            "Latest MoE validation runtime",
+            "75.1083 s, including CPU reference work"
+          ]
+        ]
+      ],
+      [
+        "p",
+        "Every tested MoE sublayer reported relative L2 error 0 and maximum absolute final-output error 0. The sublayers were tested independently, not chained as complete transformer layers. Their inputs were synthetic BF16 vectors, not a natural-language workload. The cache-request count includes the shared expert. A previous run took 91.51 s; no controlled performance comparison or statistical confidence interval is inferred from these two observations. [L4]"
+      ],
+      [
+        "h",
+        "Other checks"
+      ],
+      [
+        "p",
+        "All 256 possible packed FP4 bytes were decoded against an arithmetic reference. Single-expert pre-rounding GEMM errors were at most 2.67×10⁻⁵. Sparse-table testing covered first, interior, last, and duplicate rows: 31,512 logical lookup bytes, plus 42,016 independent reference-read bytes. Warm lookup added no file reads. Residual primitives passed against FP64 NumPy calculations using real layer-0 parameters. [L5–L7]"
+      ],
+      [
+        "p",
+        "The synthetic checksum test reached 0.544922 GiB peak reserved memory. With a 256 MiB cache it performed 34 evictions. Its timings and hit rates are transfer-test observations, not tokens per second or real routing-prediction accuracy."
+      ]
+    ]
+  },
+  {
+    "title": "5. Interpretation and limitations",
+    "body": [
+      [
+        "h",
+        "What exact agreement means"
+      ],
+      [
+        "p",
+        "The reference independently implements weight decoding and uses NumPy FP64 matrix products and routing arithmetic. It shares PyTorch FP8 activation conversion and SwiGLU logic with the tested path. Exact final BF16 agreement on the selected examples therefore supports these components, but does not establish an independent end-to-end numerical oracle, original TileLang kernel parity, or correctness for all inputs. BF16 rounding can conceal smaller intermediate differences."
+      ],
+      [
+        "h",
+        "A bandwidth bound, not a speed claim"
+      ],
+      [
+        "p",
+        "An all-miss pass through six routed FP4 experts in each of 40 layers would request about 4.512 GB including their scales, before shared experts or attention. At a hypothetical effective 1 GB/s this component alone requires roughly 4.5 seconds of transfer. This is arithmetic, not a measurement of the T7 or a model-token timing. Reuse, batching, future execution schedules, and storage layout change the actual traffic."
+      ],
+      [
+        "p",
+        "Memory feasibility and useful speed are separate questions. The small tested VRAM peaks reflect selected sublayers and tiny activation batches; they must not be presented as the memory requirement of the complete 510 GB checkpoint. Full-model KV state, long contexts, attention workspace, output projection, and transient buffers remain to be measured."
+      ],
+      [
+        "h",
+        "Threats to measurement"
+      ],
+      [
+        "p",
+        "Logical read counters measure bytes requested from mapped files, not physical device I/O. OS caching may satisfy reads. PyTorch allocated and reserved counters differ from total device residency. First-use GPU initialization and validation work contaminate elapsed time. Hit rates count entries made resident by prefetch; in a known sequence they do not measure predictive accuracy. CPU reference work and device synchronization may suppress useful stream overlap."
+      ],
+      [
+        "h",
+        "Position relative to earlier work"
+      ],
+      [
+        "p",
+        "On-demand flash-backed model execution is not a new general concept. LLM in a flash studies memory-limited inference and reducing transfer volume through reuse and storage-aware access. [W3] Frusium_loader currently contributes a specific experimental implementation and reproducibility record for this local mixed-format checkpoint and consumer-GPU setup. No novelty, priority, or comparative speedup claim is established by these tests."
+      ]
+    ]
+  },
+  {
+    "title": "6. Reproduction and next milestone",
+    "body": [
+      [
+        "h",
+        "Reproduction commands"
+      ],
+      [
+        "code",
+        "cd G:\\Models\\DeepSeek-V4.1-Flash\\Frusium_loader\n.\\run_expert_test.ps1\n.\\run_moe_test.ps1\n.\\run_sparse_rows_test.ps1\n.\\run_block_primitives_test.ps1\n.\\run_benchmark.ps1 --cache-mib 256"
+      ],
+      [
+        "p",
+        "Launchers select the project’s isolated CUDA interpreter. The checkpoint and environment are not bundled. Results are JSON snapshots; rerunning can overwrite them. Keep the evidence manifest with this report when comparing later versions. No repeated statistical benchmark, driver-version matrix, or SSD link-speed characterization has been performed."
+      ],
+      [
+        "h",
+        "Next milestone and acceptance criteria"
+      ],
+      [
+        "p",
+        "Implement one complete layer-0 block: mHC attention input mixing, normalization, low-rank Q/KV projections, RoPE, causal sliding-window attention with its sink and KV cache, grouped output projection, residual mixing, and the validated MoE. Layer 0 has no compressed-KV path and no Engram insertion, allowing an incremental full-block test without silently omitting its required components."
+      ],
+      [
+        "p",
+        "Require finite outputs, a small independent attention oracle, correct masking, prefill-versus-incremental consistency within declared numerical tolerances, tested ring-buffer wraparound, and tracked memory use. A layer-0 result will still not validate compressed attention in later layers, full Engram integration, the output head, the 40-layer schedule, or language generation."
+      ],
+      [
+        "h",
+        "Evidence and references"
+      ],
+      [
+        "p",
+        "[L1] Local config.json and model.safetensors.index.json; shard headers. [L2] Local README.md model card. [L3] Local inference/model.py and inference/kernel.py. [L4] moe_correctness_results.json. [L5] expert_correctness_results.json. [L6] sparse_rows_results.json. [L7] block_primitives_results.json. Code and result SHA-256 hashes are recorded in the companion evidence manifest; weight payloads were not hashed."
+      ],
+      [
+        "p",
+        "[W1] NVIDIA NeMo AutoModel: MXFP4 packing and decoding documentation. docs.nvidia.com/nemo/automodel/nightly/nemo-automodel/nemo_automodel/components/quantization/mxfp4"
+      ],
+      [
+        "p",
+        "[W2] PyTorch: CUDA semantics and pinned-memory/nonblocking transfer documentation. docs.pytorch.org/docs/stable/notes/cuda.html"
+      ],
+      [
+        "p",
+        "[W3] Alizadeh et al., LLM in a flash: Efficient Large Language Model Inference with Limited Memory, ACL 2024; arXiv:2312.11514. arxiv.org/abs/2312.11514"
+      ],
+      [
+        "p",
+        "This version is frozen at the four-MoE-sublayer milestone. Subsequent full-block work belongs in a later revision."
+      ]
+    ]
+  }
+]

@@ -1,0 +1,20 @@
+{
+  "status": "PASS",
+  "engram_table_rows": 384006168,
+  "engram_test_rows": [
+    0,
+    17,
+    384006167,
+    17
+  ],
+  "token_test_rows": [
+    0,
+    1,
+    129279,
+    1
+  ],
+  "logical_lookup_bytes": 31512,
+  "reference_read_bytes": 42016,
+  "cache_payload_bytes": 32256,
+  "note": "Sparse lookup only. N-gram hashing and full Engram residual integration remain pending."
+}

@@ -1,0 +1,39 @@
+{
+  "status": "PASS",
+  "layer": 0,
+  "expert": 0,
+  "seed": 1234,
+  "input_cases": [
+    "zero",
+    "normal",
+    "8x normal"
+  ],
+  "output_shape": [
+    3,
+    5120
+  ],
+  "independent_fp4_decode_test": "all 256 packed bytes passed",
+  "projections": [
+    {
+      "matrix": "w1",
+      "max_abs_gemm_error": 1.9073486328125e-06
+    },
+    {
+      "matrix": "w3",
+      "max_abs_gemm_error": 1.9073486328125e-06
+    },
+    {
+      "matrix": "w2",
+      "max_abs_gemm_error": 2.6702880859375e-05
+    }
+  ],
+  "relative_L2_error": 0.0,
+  "cosine_similarity": 1.000001072883606,
+  "max_abs_output_error": 0.0,
+  "logical_weight_read_MB": 18.80064,
+  "peak_allocated_GiB": 0.13796424865722656,
+  "peak_reserved_GiB": 0.158203125,
+  "total_seconds": 5.843364799999108,
+  "reference": "Independent NumPy decode + FP64 GEMM; shared PyTorch FP8 activation quantization; NOT original TileLang kernel parity",
+  "implementation": "One-matrix-at-a-time FP32 dequantization; not native FP4 Tensor Core execution"
+}

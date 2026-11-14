@@ -1,0 +1,68 @@
+{
+  "prompt": "Say hello.",
+  "reply": "Hello! \ud83d\udc4b How can",
+  "token_ids": [
+    19923,
+    3,
+    52780,
+    236,
+    1730,
+    588
+  ],
+  "layers": 40,
+  "seconds": 1141.1137579999995,
+  "peak_allocated_GiB": 3.510040283203125,
+  "peak_reserved_GiB": 4.302734375,
+  "output_head_mode": "resident",
+  "output_head_logical_bytes": 1323827200,
+  "token_timings": [
+    {
+      "phase": "prefill",
+      "token_id": 19923,
+      "backbone_seconds": 673.5399453,
+      "output_head_seconds": 32.82312750000074,
+      "total_seconds": 706.3630728000007,
+      "head_logical_bytes": 1323827200
+    },
+    {
+      "phase": "decode",
+      "token_id": 3,
+      "backbone_seconds": 207.60814179999943,
+      "output_head_seconds": 0.03228360000048269,
+      "total_seconds": 207.6404253999999,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 52780,
+      "backbone_seconds": 59.812186699999984,
+      "output_head_seconds": 0.032051899999714806,
+      "total_seconds": 59.8442385999997,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 236,
+      "backbone_seconds": 67.01240130000042,
+      "output_head_seconds": 0.03329409999969357,
+      "total_seconds": 67.04569540000011,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 1730,
+      "backbone_seconds": 37.73881650000021,
+      "output_head_seconds": 0.03662709999935032,
+      "total_seconds": 37.77544359999956,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 588,
+      "backbone_seconds": 62.41103759999987,
+      "output_head_seconds": 0.032020900000134134,
+      "total_seconds": 62.44305850000001,
+      "head_logical_bytes": 0
+    }
+  ]
+}

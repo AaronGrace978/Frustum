@@ -1,0 +1,45 @@
+{
+  "layers": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "experts": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "layer_payload_MB": [
+    112.80384,
+    112.80384,
+    112.80384,
+    112.80384
+  ],
+  "cache_MiB": 256,
+  "process_allocator_cap_GiB": 12,
+  "headroom_GiB": 2,
+  "workload": "packed-byte checksum, not model inference",
+  "metadata_only": false
+}
+step layer allocated_GiB reserved_GiB device_used_GiB file_read_MB hit_pct compute_ms wall_ms checksum
+file_read_MB = cumulative logical payload reads; physical SSD reads may be lower due to OS cache.
+   0     0         0.210        0.297           1.420       225.61    0.00    7315.04 7379.55 53970408896
+   1     1         0.245        0.338           1.461       338.41   50.00      16.81   67.84 54135813164
+   2     2         0.245        0.357           1.480       451.22   66.67      16.84   71.45 53979983376
+   3     3         0.245        0.357           1.480       564.02   75.00      16.80   67.12 54000282472
+   4     0         0.245        0.357           1.480       676.82   80.00      16.75   66.19 53970408896
+   5     1         0.245        0.357           1.480       789.63   83.33      16.37   68.37 54135813164
+   6     2         0.245        0.357           1.480       902.43   85.71      16.82   71.65 53979983376
+   7     3         0.245        0.357           1.480       902.43   87.50      16.48   17.19 54000282472
+{
+  "evictions": 34,
+  "expert_hits": 42,
+  "expert_requests": 48,
+  "cache_payload_MiB": 251.015625,
+  "peak_allocated_GiB": 0.2900571823120117,
+  "peak_reserved_GiB": 0.357421875
+}

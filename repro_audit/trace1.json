@@ -1,0 +1,85 @@
+{
+  "embedding": "c38794872ccad069619b0264ac617f752c83b34c9c96c5a491202eff028c871a",
+  "tensor:": "b6eeb8f9cc1dcb2807e2d6f029a17d626cd608f998ab76bfcb32896d3558334e",
+  "mixes:attn": [
+    "e6bc9d20a558a5ccbcd023449589ae318c5c19a4f77c1369f70bb551939be7fa",
+    "74500392437fa2108fae8490d14a03b42909d88b56a205c91e2f04c928a34d9a",
+    "b1923efa8ed1c20e09477c0983025646c29bf52a4ff9993e2ab6e7e860dbc8ef"
+  ],
+  "norm:layers.0.attn_norm": "59f7e469150f140080e85debaf6647ac2110b75fb4f49d0460ad8a9a52daeb05",
+  "linear:layers.0.attn.wq_a": "c1b109f15780ecc26da88d6540233f7b29bdd61d7010ba885bee169136dc2c80",
+  "norm:layers.0.attn.q_norm": "c6fa865b19f2f77101cc8a8c38540f9cba72f3b0b4d10eea80750f8168fc045a",
+  "linear:layers.0.attn.wq_b": "e2909c3e3f8e2336a592d29739e92925edd6fea7756477858c2a5acc4c9de059",
+  "linear:layers.0.attn.wkv": "63c4565ffd88276084f6ef74008d1dfbd46f8c14bb9793a745846bc9cd9a6420",
+  "norm:layers.0.attn.kv_norm": "b93faa6a1712aa5d0ebc2b546544d6f691a7db1863ba3f81306a9af9665c05e0",
+  "linear:layers.0.attn.wo_b": "5d59ea709ec9505f2f6a6c69fd0629d6992c2dd1f29ed31810a3766113b53203",
+  "attention:0": "5d59ea709ec9505f2f6a6c69fd0629d6992c2dd1f29ed31810a3766113b53203",
+  "mixes:ffn": [
+    "ca62cdf31875cceab827ea74e4f2c195c24a61f1148ffde6ae9584c637ebcc66",
+    "6629b3259ce27c851b2d425c474bbd2e04aa841108d5cfd11b1d2b4df2ae2677",
+    "c5e9497a338c808d9729e687d38eea1dd0510ee2e1907861a0c82a994702049e"
+  ],
+  "norm:layers.0.ffn_norm": "010784d78e10dbd05e38df88d0ea165bed6ff1bb0fd1b772f1b5113ccbcb0152",
+  "moe_input": "010784d78e10dbd05e38df88d0ea165bed6ff1bb0fd1b772f1b5113ccbcb0152",
+  "ids": [
+    [
+      226,
+      21,
+      94,
+      251,
+      163,
+      206
+    ],
+    [
+      206,
+      372,
+      359,
+      158,
+      226,
+      233
+    ],
+    [
+      94,
+      206,
+      105,
+      361,
+      307,
+      226
+    ]
+  ],
+  "mix": [
+    [
+      0.4220617711544037,
+      0.34518101811408997,
+      0.20923027396202087,
+      0.18190893530845642,
+      0.1658191829919815,
+      0.17579884827136993
+    ],
+    [
+      0.38548269867897034,
+      0.24419209361076355,
+      0.22987893223762512,
+      0.22467640042304993,
+      0.21082204580307007,
+      0.2049478143453598
+    ],
+    [
+      0.37133878469467163,
+      0.38103997707366943,
+      0.1903049349784851,
+      0.19160489737987518,
+      0.18421286344528198,
+      0.18149849772453308
+    ]
+  ],
+  "torch": "2.11.0+cu128",
+  "python": "3.13.15 (main, Aug 25 2026, 14:00:51) [MSC v.1944 64 bit (AMD64)]",
+  "code_hashes": {
+    "frusium_loader.py": "355d1b734a9b1485ad1d75c3feceda09d59ad16315f39888b7626404cb6cc093",
+    "layer0_block.py": "0efbdae30171c9a8ac1b0ce180958c35121052f00a27f283b36788c31723b3be",
+    "block_primitives.py": "e7c3b926dd33ce4b24d749c9aa20d58aad223312b2acebb2982a2165db139618",
+    "sparse_rows.py": "aaceb34a84d37ae9dd2809205c382fafebc33109e7dac50e228f8297b6ea38e4",
+    "streamed_moe.py": "4be133a4216174da8a29bc79bfccb5894198f0298aa7fcba0574aa1ce757b422"
+  }
+}

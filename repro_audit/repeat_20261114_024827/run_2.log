@@ -1,0 +1,160 @@
+{"primitive_tests": "PASS", "tests": ["attention NumPy oracle", "causal future-token masking", "KV ring wraparound", "KV position rejection", "RoPE inverse"]}
+{"full_prefill": "PASS", "moe": {"layer": 0, "selected_experts": [[226, 21, 94, 251, 163, 206], [206, 372, 359, 158, 226, 233], [94, 206, 105, 361, 307, 226]], "routing_weights": [[0.4220617711544037, 0.34518101811408997, 0.20923027396202087, 0.18190893530845642, 0.1658191829919815, 0.17579884827136993], [0.38548269867897034, 0.24419209361076355, 0.22987893223762512, 0.22467640042304993, 0.21082204580307007, 0.2049478143453598], [0.37133878469467163, 0.38103997707366943, 0.1903049349784851, 0.19160489737987518, 0.18421286344528198, 0.18149849772453308]], "unique_routed_experts": 13, "shared_expert": true, "relative_L2_error": 0.0, "cosine_similarity": 1.0, "max_abs_error": 0.0}}
+{
+  "status": "PASS",
+  "provenance": {
+    "python": "3.13.15 (main, Aug 25 2026, 14:00:51) [MSC v.1944 64 bit (AMD64)]",
+    "executable": "C:\\Users\\AGrac\\Documents\\Codex\\2026-11-13\\new-chat-3\\Frusium_loader\\.venv-cuda\\Scripts\\python.exe",
+    "platform": "Windows-11-10.0.26300-SP0",
+    "torch": "2.11.0+cu128",
+    "cuda_runtime": "12.8",
+    "gpu": "NVIDIA GeForce RTX 5060 Ti",
+    "matmul_tf32": false,
+    "cudnn_tf32": false,
+    "deterministic_algorithms": false,
+    "environment": {
+      "CUBLAS_WORKSPACE_CONFIG": null,
+      "NVIDIA_TF32_OVERRIDE": null,
+      "TORCH_ALLOW_TF32_CUBLAS_OVERRIDE": null,
+      "CUDA_LAUNCH_BLOCKING": null,
+      "PYTORCH_CUDA_ALLOC_CONF": null,
+      "PYTORCH_ALLOC_CONF": null
+    },
+    "source_sha256": {
+      "frusium_loader.py": "48c034ac70f46c60b8c30954151a544bea0e5730a8dd6d8e90ef12b02fac2501",
+      "benchmark_layers.py": "2e714009f6b2dc9403eccbe3caac31541e09030bc584550eeaa796e87a8ed74d",
+      "expert_correctness.py": "c10f3e2412f6841e179ccbae0b379cc6d7eb0c0428bee48d7f08ec36fad80a77",
+      "streamed_moe.py": "4be133a4216174da8a29bc79bfccb5894198f0298aa7fcba0574aa1ce757b422",
+      "sparse_rows.py": "aaceb34a84d37ae9dd2809205c382fafebc33109e7dac50e228f8297b6ea38e4",
+      "block_primitives.py": "e7c3b926dd33ce4b24d749c9aa20d58aad223312b2acebb2982a2165db139618",
+      "layer0_block.py": "5f743d9b385a4e3fec38d73eaf9155b33483d1e4d8d152fbb589fcd0ff7e6a15",
+      "reproducibility.py": "6c3dffcd7fa5988770c505cef04690fba4d2b7d8cea684555a768881e8158f2f"
+    },
+    "checkpoint_metadata_sha256": {
+      "config.json": "8be45ce0476004a3f529fd896115a4a2e800a129ad2d3ec05b16050f52e21879",
+      "model.safetensors.index.json": "74b0686a3d2891980d5e303251b075a3bccae2c2ff650747db2620a649b98fa8"
+    }
+  },
+  "full_prefill_trace": {
+    "block_input": "f804c6f3b7cd6ac721b49dc518b99e3bcf35e4d474612bc53497d7983a911ff3",
+    "pre_mix": "ee9b3797eecf64277e89a8c78ea6e632532f60053359cf053f51de9d25d16956",
+    "attention_output": "5d59ea709ec9505f2f6a6c69fd0629d6992c2dd1f29ed31810a3766113b53203",
+    "attention_residual": "e900a29aa91ceee28a8f5a090ca50dd16981b69c7179a7a6ac28317970e7c4a5",
+    "moe_input": "010784d78e10dbd05e38df88d0ea165bed6ff1bb0fd1b772f1b5113ccbcb0152",
+    "block_output": "d44cac9d28778735d3c1339ed98b44745c53e81f6a8b0440496cd0e7dc5ab9b4"
+  },
+  "resident_dense_sha256": {
+    "layers.0.attn.attn_sink": "8017bf7692016398f5b28fee5afe99d3f2f3a54cb68fc66d86a5b7a58c241457",
+    "layers.0.attn.kv_norm.weight": "2a9b0a0dceb2ba42257731be89a985d42dd17da06158eb0357683834bab0ddb9",
+    "layers.0.attn.q_norm.weight": "bc33729956bf59c4c8cedeee3583e2c1e12415f42ea5653d7137c6f16226fc28",
+    "layers.0.attn.wkv.scale": "fd801988e6a0c334151976928704e73a6afbc0aee855a3b36023ecda2f1b576b",
+    "layers.0.attn.wkv.weight": "a26c48a7a2a9c2cd0a5186d3f21865edde2b32e2ed61948bee17ec1eaa8a5fd0",
+    "layers.0.attn.wo_a.scale": "fb4b21f8af8640537b1cd00b5ab1946eeaf84ac02580bdd2e505f5a0678fdec8",
+    "layers.0.attn.wo_a.weight": "f3e330fb37ed3906d25d59341eeda118aafc82d6c6a58351ee376b213388e39e",
+    "layers.0.attn.wo_b.scale": "08628f0bc3f528ba01dab4a80a1a3cd3851d596aae289f4a34e99386a2e46e05",
+    "layers.0.attn.wo_b.weight": "fca947ddeba2433859869eb6a2c27c95d1454d7c0f0d9e348eb46b487b933a86",
+    "layers.0.attn.wq_a.scale": "3255c77dccd9bd2a2932f44b3f3ca3901d5fa1a3c2d05b7455605ebd2691710d",
+    "layers.0.attn.wq_a.weight": "d75dd17b5fd33533ab8269412e23c01a44314fd719b8e0d274cd437b3f125af7",
+    "layers.0.attn.wq_b.scale": "081f9c9256e3de8a971a10296a2f62bef4f3cb2653dd0b564d8e80e5791ef0ab",
+    "layers.0.attn.wq_b.weight": "2da003dfcf247b36fc776e7c43ffaafdf717af4e23c20c8d0dccfc5ac7bae028",
+    "layers.0.attn_norm.weight": "1e862a4492423ffe1663b101267ac4710ba72ec0cea51b1396ea5c9c0a1fa682",
+    "layers.0.ffn_norm.weight": "b6eeb8f9cc1dcb2807e2d6f029a17d626cd608f998ab76bfcb32896d3558334e",
+    "layers.0.hc_attn_base": "becbd2b643d7be6c4714cae2a236283e4ddba20eabc9bf24cf5ccc42706a098e",
+    "layers.0.hc_attn_fn": "11c9abd39f35e3364aad812c3f2dcb9c5fa5cf71e0f837a1af684112a00f930c",
+    "layers.0.hc_attn_scale": "469d1cd794e040d20e34c63eeef4140aea16495449b16a73fd574dd3ae841eb2",
+    "layers.0.hc_ffn_base": "0a53e700c08e39dfd3ece8132317b82dfae15a448983199e4d9fb0809421003f",
+    "layers.0.hc_ffn_fn": "9b835d9c8b7454eafdda442beb239d1a2679f9d22ccfe5ada851308df89e6ce2",
+    "layers.0.hc_ffn_scale": "c7228cacd10d18f0d1f6f84e93830e78dc4ce43a272788e0e562266876617d16"
+  },
+  "resident_router_sha256": {
+    "layers.0.ffn.gate.bias": "7cc2d71eb39af331c32cf35fea8fcc84be5706a7188791eaa54df7cad5f43b0b",
+    "layers.0.ffn.gate.weight": "1ec40d2dac31f17224554bfc47108ecbd4c8d6f748e4043276444cdef8a2a085"
+  },
+  "output_sha256": "d44cac9d28778735d3c1339ed98b44745c53e81f6a8b0440496cd0e7dc5ab9b4",
+  "scope": "Complete layer-0 block only; no full-model generation or later-layer compressed attention",
+  "actual_token_embedding_ids": [
+    100,
+    200,
+    300
+  ],
+  "output_shape": [
+    1,
+    3,
+    4,
+    5120
+  ],
+  "primitive_tests": [
+    "attention NumPy oracle",
+    "causal future-token masking",
+    "KV ring wraparound",
+    "KV position rejection",
+    "RoPE inverse"
+  ],
+  "full_prefill_vs_prefix_plus_decode_relative_L2": 0.0,
+  "max_abs_block_difference": 0.0,
+  "full_prefill_MoE_reference": {
+    "layer": 0,
+    "selected_experts": [
+      [
+        226,
+        21,
+        94,
+        251,
+        163,
+        206
+      ],
+      [
+        206,
+        372,
+        359,
+        158,
+        226,
+        233
+      ],
+      [
+        94,
+        206,
+        105,
+        361,
+        307,
+        226
+      ]
+    ],
+    "routing_weights": [
+      [
+        0.4220617711544037,
+        0.34518101811408997,
+        0.20923027396202087,
+        0.18190893530845642,
+        0.1658191829919815,
+        0.17579884827136993
+      ],
+      [
+        0.38548269867897034,
+        0.24419209361076355,
+        0.22987893223762512,
+        0.22467640042304993,
+        0.21082204580307007,
+        0.2049478143453598
+      ],
+      [
+        0.37133878469467163,
+        0.38103997707366943,
+        0.1903049349784851,
+        0.19160489737987518,
+        0.18421286344528198,
+        0.18149849772453308
+      ]
+    ],
+    "unique_routed_experts": 13,
+    "shared_expert": true,
+    "relative_L2_error": 0.0,
+    "cosine_similarity": 1.0,
+    "max_abs_error": 0.0
+  },
+  "logical_weight_read_MB": 508.495832,
+  "peak_allocated_GiB": 0.9178171157836914,
+  "peak_reserved_GiB": 1.236328125,
+  "seconds_including_CPU_validation": 37.60301079999999,
+  "caveat": "Attention oracle uses tiny synthetic dimensions; full-block check compares two schedules of the same implementation, not original TileLang parity. Full attention-window wrap validated at primitive level only."
+}

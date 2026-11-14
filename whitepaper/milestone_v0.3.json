@@ -1,0 +1,16 @@
+[
+  {
+    "title": "7. Sequential text blocks",
+    "body": [
+      ["p", "The Layer 0 reproducibility audit passed across two independent processes and against the saved baseline. The sequential run also reproduced the saved Layer 0 output fingerprint."],
+      ["table", [["Layer", "Checkpoint execution"], ["0", "Sliding-window latent attention"], ["1", "Sparse Engram lookup and gated residual update before sliding-window attention"], ["2", "Sliding window plus 2:1 compressed KV and causal index selection"], ["3", "Sliding window plus the compressed KV and selections published by Layer 2"]]],
+      ["p", "The runner carries the hyper-connection residual stream and its pre-mix coefficients between blocks. Layer 2 keeps incomplete compression groups across decode steps. The compressor weights are stored as BF16 and promoted to FP32 for the learned pooling projections."],
+      ["p", "Using checkpoint token IDs 100, 200 and 300, all four MoE sublayers passed the NumPy routing and matrix-product references. Full prefill versus a two-token prefix and one cached decode differed by 6.24e-5 relative L2 and 0.000977 maximum absolute error."],
+      ["p", "Peak PyTorch memory was 2.254 GiB allocated and 3.039 GiB reserved. The full validation requested 4,767.51 MB of logical weight reads. This includes both execution schedules and CPU-reference validation. The eager PyTorch path still requires TileLang parity and long-context testing."],
+      ["p", "Evidence: reproducibility_results.json, repro_baseline.json, layers0_3_results.json and the checkpoint's local inference/model.py and inference/kernel.py."],
+      ["h", "First generated reply"],
+      ["p", "The text runner executed all 40 blocks and streamed the BF16 output head for greedy decoding. For the prompt Say hello., the six-token run returned Hello! followed by a waving-hand emoji and How can. It stopped at the configured token limit."],
+      ["p", "The single run took 1,117.56 seconds with 2.276 GiB allocated and 3.057 GiB reserved at peak. The output head alone requested 7.943 GB of logical weight reads. The result establishes short-prompt text generation. Multi-turn quality, interactive latency and full-model numerical parity remain open. See chat_smoke_results.json."]
+    ]
+  }
+]

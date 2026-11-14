@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv*/
+verify_runs/
+backup_v0.4/
+frusium_snapshot.tar
+*.tar

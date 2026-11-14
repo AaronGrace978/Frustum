@@ -1,0 +1,89 @@
+{
+  "status": "PASS",
+  "scope": "Complete layer-0 block only; no full-model generation or later-layer compressed attention",
+  "actual_token_embedding_ids": [
+    100,
+    200,
+    300
+  ],
+  "output_shape": [
+    1,
+    3,
+    4,
+    5120
+  ],
+  "primitive_tests": [
+    "attention NumPy oracle",
+    "causal future-token masking",
+    "KV ring wraparound",
+    "KV position rejection",
+    "RoPE inverse"
+  ],
+  "full_prefill_vs_prefix_plus_decode_relative_L2": 0.0,
+  "max_abs_block_difference": 0.0,
+  "full_prefill_MoE_reference": {
+    "layer": 0,
+    "selected_experts": [
+      [
+        240,
+        103,
+        83,
+        69,
+        202,
+        94
+      ],
+      [
+        240,
+        372,
+        93,
+        238,
+        226,
+        69
+      ],
+      [
+        240,
+        93,
+        94,
+        238,
+        69,
+        23
+      ]
+    ],
+    "routing_weights": [
+      [
+        0.3045496344566345,
+        0.26871275901794434,
+        0.23206450045108795,
+        0.23509758710861206,
+        0.2284306436777115,
+        0.23114486038684845
+      ],
+      [
+        0.2928173542022705,
+        0.25463294982910156,
+        0.25202837586402893,
+        0.24588412046432495,
+        0.22488313913345337,
+        0.22975406050682068
+      ],
+      [
+        0.29462510347366333,
+        0.2686285376548767,
+        0.24428823590278625,
+        0.23710206151008606,
+        0.22487705945968628,
+        0.23047906160354614
+      ]
+    ],
+    "unique_routed_experts": 11,
+    "shared_expert": true,
+    "relative_L2_error": 0.0,
+    "cosine_similarity": 1.0,
+    "max_abs_error": 0.0
+  },
+  "logical_weight_read_MB": 376.891352,
+  "peak_allocated_GiB": 0.9010400772094727,
+  "peak_reserved_GiB": 1.20703125,
+  "seconds_including_CPU_validation": 25.7577558999983,
+  "caveat": "Attention oracle uses tiny synthetic dimensions; full-block check compares two schedules of the same implementation, not original TileLang parity. Full attention-window wrap validated at primitive level only."
+}

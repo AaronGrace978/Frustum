@@ -1,0 +1,9 @@
+{
+  "scope": "Layer 0 repeatability, sequential blocks 0-3 validation, and first 40-layer generation",
+  "sha256": {
+    "repro_baseline.json": "125da990df781c3bc0eab75eca4be6ec1e8afced59b7864520d90b49c28c13cc",
+    "reproducibility_results.json": "0cefbe800d241d697adb85af8499b2c770f8a9e6e7e4b0496caa01c207b1f465",
+    "layers0_3_results.json": "9efeb31e49e590664040600fe493f85fcf95e85b6e442b113e3c455bd8417761",
+    "chat_smoke_results.json": "f5da2bca538b7c6ba81333c45900ba8c6e9880bd15fae9d519f3464ffba9513e"
+  }
+}

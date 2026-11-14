@@ -1,0 +1,59 @@
+{"status": "PASS", "layer": 0, "selected_experts": [[93, 54, 222, 333, 157, 4], [23, 61, 134, 347, 69, 58]], "routing_weights": [[0.28413113951683044, 0.26432129740715027, 0.25178277492523193, 0.23008882999420166, 0.23145809769630432, 0.23821789026260376], [0.31030774116516113, 0.2557414472103119, 0.2688239812850952, 0.22956392168998718, 0.22107771039009094, 0.2144852876663208]], "unique_routed_experts": 12, "shared_expert": true, "relative_L2_error": 0.0, "cosine_similarity": 1.0, "max_abs_error": 0.0}
+{
+  "status": "PASS",
+  "scope": "Independent MoE sublayers, NOT sequential transformer layers or generation",
+  "reference": "NumPy FP64 routing and matrix products; independent FP4/FP8 decode; shared PyTorch activation quantization/SwiGLU; not TileLang kernel parity",
+  "layers": [
+    {
+      "layer": 0,
+      "selected_experts": [
+        [
+          93,
+          54,
+          222,
+          333,
+          157,
+          4
+        ],
+        [
+          23,
+          61,
+          134,
+          347,
+          69,
+          58
+        ]
+      ],
+      "routing_weights": [
+        [
+          0.28413113951683044,
+          0.26432129740715027,
+          0.25178277492523193,
+          0.23008882999420166,
+          0.23145809769630432,
+          0.23821789026260376
+        ],
+        [
+          0.31030774116516113,
+          0.2557414472103119,
+          0.2688239812850952,
+          0.22956392168998718,
+          0.22107771039009094,
+          0.2144852876663208
+        ]
+      ],
+      "unique_routed_experts": 12,
+      "shared_expert": true,
+      "relative_L2_error": 0.0,
+      "cosine_similarity": 1.0,
+      "max_abs_error": 0.0
+    }
+  ],
+  "logical_weight_read_MB": 264.965376,
+  "peak_allocated_GiB": 0.40340232849121094,
+  "peak_reserved_GiB": 0.505859375,
+  "evictions": 0,
+  "cache_hits_including_prefetch": 12,
+  "expert_requests": 13,
+  "elapsed_including_CPU_validation": 20.802592600004573
+}

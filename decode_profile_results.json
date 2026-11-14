@@ -1,0 +1,1645 @@
+{
+  "prompt": "Say hello.",
+  "reply": "Hello! \ufffd",
+  "token_ids": [
+    19923,
+    3,
+    52780
+  ],
+  "layers": 40,
+  "seconds": 1070.0710568,
+  "peak_allocated_GiB": 3.508665084838867,
+  "peak_reserved_GiB": 4.291015625,
+  "output_head_mode": "resident",
+  "output_head_logical_bytes": 1323827200,
+  "token_timings": [
+    {
+      "phase": "prefill",
+      "token_id": 19923,
+      "backbone_seconds": 688.1075179,
+      "output_head_seconds": 33.21546819999992,
+      "total_seconds": 721.3229861,
+      "head_logical_bytes": 1323827200
+    },
+    {
+      "phase": "decode",
+      "token_id": 3,
+      "backbone_seconds": 279.8193417,
+      "output_head_seconds": 0.03203159999998206,
+      "total_seconds": 279.8513733,
+      "head_logical_bytes": 0,
+      "layers": [
+        {
+          "layer": 0,
+          "seconds": 7.448247000000038,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              155,
+              144,
+              206,
+              124,
+              106,
+              352
+            ]
+          ]
+        },
+        {
+          "layer": 1,
+          "seconds": 11.451454200000171,
+          "logical_bytes": {
+            "dense": 288217816,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 6336
+          },
+          "selected_experts": [
+            [
+              91,
+              317,
+              23,
+              114,
+              108,
+              343
+            ]
+          ]
+        },
+        {
+          "layer": 2,
+          "seconds": 7.881783199999973,
+          "logical_bytes": {
+            "dense": 146889688,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              173,
+              217,
+              98,
+              348,
+              365,
+              84
+            ]
+          ]
+        },
+        {
+          "layer": 3,
+          "seconds": 7.439867999999933,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              123,
+              257,
+              131,
+              195,
+              153,
+              222
+            ]
+          ]
+        },
+        {
+          "layer": 4,
+          "seconds": 7.423018100000036,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              337,
+              112,
+              44,
+              127,
+              122,
+              19
+            ]
+          ]
+        },
+        {
+          "layer": 5,
+          "seconds": 7.328418100000135,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              160,
+              137,
+              203,
+              304,
+              57,
+              40
+            ]
+          ]
+        },
+        {
+          "layer": 6,
+          "seconds": 7.389717000000019,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              104,
+              376,
+              146,
+              244,
+              48,
+              122
+            ]
+          ]
+        },
+        {
+          "layer": 7,
+          "seconds": 7.432417400000077,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              207,
+              152,
+              245,
+              228,
+              4,
+              233
+            ]
+          ]
+        },
+        {
+          "layer": 8,
+          "seconds": 7.820049899999958,
+          "logical_bytes": {
+            "dense": 146889688,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              350,
+              263,
+              349,
+              16,
+              288,
+              352
+            ]
+          ]
+        },
+        {
+          "layer": 9,
+          "seconds": 7.352168199999824,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              56,
+              9,
+              105,
+              53,
+              312,
+              93
+            ]
+          ]
+        },
+        {
+          "layer": 10,
+          "seconds": 7.440472199999931,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              266,
+              382,
+              43,
+              328,
+              358,
+              32
+            ]
+          ]
+        },
+        {
+          "layer": 11,
+          "seconds": 7.397109900000032,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              218,
+              13,
+              31,
+              38,
+              30,
+              122
+            ]
+          ]
+        },
+        {
+          "layer": 12,
+          "seconds": 7.300319500000114,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              132,
+              206,
+              318,
+              266,
+              154,
+              122
+            ]
+          ]
+        },
+        {
+          "layer": 13,
+          "seconds": 7.40955780000013,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              123,
+              377,
+              14,
+              197,
+              259,
+              210
+            ]
+          ]
+        },
+        {
+          "layer": 14,
+          "seconds": 11.937059899999895,
+          "logical_bytes": {
+            "dense": 304411608,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 6336
+          },
+          "selected_experts": [
+            [
+              375,
+              33,
+              235,
+              379,
+              231,
+              172
+            ]
+          ]
+        },
+        {
+          "layer": 15,
+          "seconds": 7.500668700000006,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              258,
+              33,
+              194,
+              51,
+              229,
+              295
+            ]
+          ]
+        },
+        {
+          "layer": 16,
+          "seconds": 7.455351400000154,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              77,
+              283,
+              163,
+              265,
+              329,
+              352
+            ]
+          ]
+        },
+        {
+          "layer": 17,
+          "seconds": 7.395635000000084,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              0,
+              275,
+              116,
+              312,
+              378,
+              274
+            ]
+          ]
+        },
+        {
+          "layer": 18,
+          "seconds": 7.455460700000003,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              343,
+              307,
+              308,
+              129,
+              147,
+              273
+            ]
+          ]
+        },
+        {
+          "layer": 19,
+          "seconds": 7.625121599999829,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              147,
+              137,
+              118,
+              367,
+              111,
+              129
+            ]
+          ]
+        },
+        {
+          "layer": 20,
+          "seconds": 7.675969699999996,
+          "logical_bytes": {
+            "dense": 141646808,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              357,
+              278,
+              352,
+              80,
+              98,
+              201
+            ]
+          ]
+        },
+        {
+          "layer": 21,
+          "seconds": 7.3883776000000125,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              193,
+              61,
+              368,
+              29,
+              79,
+              161
+            ]
+          ]
+        },
+        {
+          "layer": 22,
+          "seconds": 7.4136954000000514,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              277,
+              317,
+              345,
+              121,
+              151,
+              81
+            ]
+          ]
+        },
+        {
+          "layer": 23,
+          "seconds": 7.374704300000076,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              188,
+              290,
+              50,
+              11,
+              63,
+              332
+            ]
+          ]
+        },
+        {
+          "layer": 24,
+          "seconds": 7.506466499999988,
+          "logical_bytes": {
+            "dense": 136271576,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              60,
+              73,
+              171,
+              168,
+              161,
+              28
+            ]
+          ]
+        },
+        {
+          "layer": 25,
+          "seconds": 7.411451100000022,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              276,
+              130,
+              211,
+              62,
+              326,
+              106
+            ]
+          ]
+        },
+        {
+          "layer": 26,
+          "seconds": 7.369069300000092,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              139,
+              165,
+              286,
+              357,
+              178,
+              183
+            ]
+          ]
+        },
+        {
+          "layer": 27,
+          "seconds": 7.443590600000107,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              171,
+              16,
+              85,
+              293,
+              87,
+              334
+            ]
+          ]
+        },
+        {
+          "layer": 28,
+          "seconds": 7.463893199999802,
+          "logical_bytes": {
+            "dense": 136271576,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              165,
+              315,
+              46,
+              357,
+              19,
+              345
+            ]
+          ]
+        },
+        {
+          "layer": 29,
+          "seconds": 7.388893900000085,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              66,
+              91,
+              319,
+              210,
+              379,
+              378
+            ]
+          ]
+        },
+        {
+          "layer": 30,
+          "seconds": 7.482014399999798,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              50,
+              379,
+              221,
+              236,
+              326,
+              78
+            ]
+          ]
+        },
+        {
+          "layer": 31,
+          "seconds": 7.406846999999971,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              156,
+              236,
+              276,
+              42,
+              332,
+              24
+            ]
+          ]
+        },
+        {
+          "layer": 32,
+          "seconds": 7.536470100000088,
+          "logical_bytes": {
+            "dense": 136271576,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              41,
+              184,
+              339,
+              153,
+              249,
+              314
+            ]
+          ]
+        },
+        {
+          "layer": 33,
+          "seconds": 7.314981099999841,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              138,
+              79,
+              157,
+              143,
+              84,
+              119
+            ]
+          ]
+        },
+        {
+          "layer": 34,
+          "seconds": 7.366432799999984,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              325,
+              262,
+              148,
+              319,
+              96,
+              65
+            ]
+          ]
+        },
+        {
+          "layer": 35,
+          "seconds": 5.041834000000108,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              305,
+              215,
+              235,
+              54,
+              133,
+              306
+            ]
+          ]
+        },
+        {
+          "layer": 36,
+          "seconds": 1.7101658999999927,
+          "logical_bytes": {
+            "dense": 136271576,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              278,
+              302,
+              143,
+              28,
+              214,
+              315
+            ]
+          ]
+        },
+        {
+          "layer": 37,
+          "seconds": 1.2092591999999058,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              161,
+              359,
+              313,
+              360,
+              64,
+              132
+            ]
+          ]
+        },
+        {
+          "layer": 38,
+          "seconds": 1.6576829999999063,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              326,
+              182,
+              97,
+              79,
+              16,
+              325
+            ]
+          ]
+        },
+        {
+          "layer": 39,
+          "seconds": 0.746826800000008,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              215,
+              42,
+              348,
+              120,
+              130,
+              343
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "phase": "decode",
+      "token_id": 52780,
+      "backbone_seconds": 68.86160840000002,
+      "output_head_seconds": 0.033314599999812344,
+      "total_seconds": 68.89492299999984,
+      "head_logical_bytes": 0,
+      "layers": [
+        {
+          "layer": 0,
+          "seconds": 1.6742169000001468,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              155,
+              152,
+              206,
+              231,
+              41,
+              124
+            ]
+          ]
+        },
+        {
+          "layer": 1,
+          "seconds": 2.877888299999995,
+          "logical_bytes": {
+            "dense": 288217816,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 6336
+          },
+          "selected_experts": [
+            [
+              227,
+              317,
+              73,
+              198,
+              85,
+              348
+            ]
+          ]
+        },
+        {
+          "layer": 2,
+          "seconds": 2.6362617999998292,
+          "logical_bytes": {
+            "dense": 146757336,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              305,
+              353,
+              36,
+              348,
+              220,
+              118
+            ]
+          ]
+        },
+        {
+          "layer": 3,
+          "seconds": 1.24842620000004,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              131,
+              205,
+              195,
+              123,
+              307,
+              222
+            ]
+          ]
+        },
+        {
+          "layer": 4,
+          "seconds": 1.2197100999999293,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              112,
+              329,
+              122,
+              127,
+              337,
+              346
+            ]
+          ]
+        },
+        {
+          "layer": 5,
+          "seconds": 1.2275915999998688,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              304,
+              40,
+              57,
+              137,
+              5,
+              104
+            ]
+          ]
+        },
+        {
+          "layer": 6,
+          "seconds": 1.2444137999998475,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              104,
+              146,
+              244,
+              376,
+              327,
+              251
+            ]
+          ]
+        },
+        {
+          "layer": 7,
+          "seconds": 1.2086363000000802,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              4,
+              157,
+              207,
+              245,
+              233,
+              67
+            ]
+          ]
+        },
+        {
+          "layer": 8,
+          "seconds": 2.187101400000074,
+          "logical_bytes": {
+            "dense": 146757336,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              263,
+              289,
+              29,
+              349,
+              210,
+              112
+            ]
+          ]
+        },
+        {
+          "layer": 9,
+          "seconds": 0.7215692999998282,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              312,
+              53,
+              105,
+              56,
+              9,
+              47
+            ]
+          ]
+        },
+        {
+          "layer": 10,
+          "seconds": 0.7205013999998755,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              266,
+              381,
+              43,
+              358,
+              382,
+              328
+            ]
+          ]
+        },
+        {
+          "layer": 11,
+          "seconds": 1.656597199999851,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              218,
+              13,
+              24,
+              328,
+              38,
+              89
+            ]
+          ]
+        },
+        {
+          "layer": 12,
+          "seconds": 1.6861140000000887,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              132,
+              71,
+              154,
+              206,
+              48,
+              19
+            ]
+          ]
+        },
+        {
+          "layer": 13,
+          "seconds": 2.654662199999848,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              377,
+              111,
+              67,
+              300,
+              244,
+              234
+            ]
+          ]
+        },
+        {
+          "layer": 14,
+          "seconds": 1.451254199999994,
+          "logical_bytes": {
+            "dense": 304279256,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 6336
+          },
+          "selected_experts": [
+            [
+              1,
+              375,
+              172,
+              379,
+              235,
+              249
+            ]
+          ]
+        },
+        {
+          "layer": 15,
+          "seconds": 2.6840623000000505,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              172,
+              229,
+              165,
+              19,
+              351,
+              367
+            ]
+          ]
+        },
+        {
+          "layer": 16,
+          "seconds": 1.6653243000000657,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              332,
+              352,
+              163,
+              77,
+              195,
+              107
+            ]
+          ]
+        },
+        {
+          "layer": 17,
+          "seconds": 1.6854909999999563,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              378,
+              195,
+              275,
+              274,
+              40,
+              282
+            ]
+          ]
+        },
+        {
+          "layer": 18,
+          "seconds": 1.2549463000000287,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              308,
+              343,
+              359,
+              147,
+              108,
+              307
+            ]
+          ]
+        },
+        {
+          "layer": 19,
+          "seconds": 1.6509863000001133,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              227,
+              129,
+              118,
+              98,
+              111,
+              130
+            ]
+          ]
+        },
+        {
+          "layer": 20,
+          "seconds": 1.2037708000000293,
+          "logical_bytes": {
+            "dense": 141646808,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              80,
+              357,
+              270,
+              278,
+              3,
+              201
+            ]
+          ]
+        },
+        {
+          "layer": 21,
+          "seconds": 1.2092115000000376,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              193,
+              61,
+              21,
+              368,
+              315,
+              79
+            ]
+          ]
+        },
+        {
+          "layer": 22,
+          "seconds": 1.713090100000045,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              277,
+              81,
+              117,
+              366,
+              121,
+              148
+            ]
+          ]
+        },
+        {
+          "layer": 23,
+          "seconds": 2.228190300000051,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              188,
+              50,
+              167,
+              160,
+              150,
+              65
+            ]
+          ]
+        },
+        {
+          "layer": 24,
+          "seconds": 1.2187157000000752,
+          "logical_bytes": {
+            "dense": 136271576,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              60,
+              73,
+              154,
+              161,
+              158,
+              171
+            ]
+          ]
+        },
+        {
+          "layer": 25,
+          "seconds": 1.20180849999997,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              130,
+              211,
+              276,
+              239,
+              55,
+              62
+            ]
+          ]
+        },
+        {
+          "layer": 26,
+          "seconds": 1.216220900000053,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              139,
+              286,
+              347,
+              296,
+              165,
+              357
+            ]
+          ]
+        },
+        {
+          "layer": 27,
+          "seconds": 2.6700286000000233,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              301,
+              171,
+              136,
+              49,
+              104,
+              103
+            ]
+          ]
+        },
+        {
+          "layer": 28,
+          "seconds": 1.7002979999999752,
+          "logical_bytes": {
+            "dense": 136271576,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              315,
+              165,
+              25,
+              345,
+              184,
+              87
+            ]
+          ]
+        },
+        {
+          "layer": 29,
+          "seconds": 1.242855800000143,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              91,
+              66,
+              330,
+              319,
+              345,
+              210
+            ]
+          ]
+        },
+        {
+          "layer": 30,
+          "seconds": 1.7257742999997845,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              50,
+              259,
+              63,
+              379,
+              322,
+              236
+            ]
+          ]
+        },
+        {
+          "layer": 31,
+          "seconds": 2.1726123999999345,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              217,
+              36,
+              236,
+              42,
+              185,
+              383
+            ]
+          ]
+        },
+        {
+          "layer": 32,
+          "seconds": 2.1779457000000093,
+          "logical_bytes": {
+            "dense": 136271576,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              5,
+              41,
+              279,
+              228,
+              368,
+              184
+            ]
+          ]
+        },
+        {
+          "layer": 33,
+          "seconds": 1.7122683000000052,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              138,
+              30,
+              143,
+              246,
+              48,
+              79
+            ]
+          ]
+        },
+        {
+          "layer": 34,
+          "seconds": 1.6842165000000477,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              325,
+              324,
+              262,
+              119,
+              275,
+              148
+            ]
+          ]
+        },
+        {
+          "layer": 35,
+          "seconds": 1.7116630000000441,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              305,
+              116,
+              54,
+              199,
+              369,
+              215
+            ]
+          ]
+        },
+        {
+          "layer": 36,
+          "seconds": 2.6329238000000714,
+          "logical_bytes": {
+            "dense": 136271576,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              366,
+              9,
+              171,
+              28,
+              349,
+              236
+            ]
+          ]
+        },
+        {
+          "layer": 37,
+          "seconds": 1.7175245000000814,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              272,
+              359,
+              64,
+              86,
+              372,
+              313
+            ]
+          ]
+        },
+        {
+          "layer": 38,
+          "seconds": 2.1819249999998647,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              283,
+              182,
+              125,
+              316,
+              91,
+              97
+            ]
+          ]
+        },
+        {
+          "layer": 39,
+          "seconds": 2.1809884000001603,
+          "logical_bytes": {
+            "dense": 130695896,
+            "experts": 148227840,
+            "router": 3933696,
+            "rows": 0
+          },
+          "selected_experts": [
+            [
+              149,
+              120,
+              268,
+              160,
+              130,
+              33
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

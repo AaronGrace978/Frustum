@@ -1,0 +1,15 @@
+{
+  "snapshot": "2026-11-13; prior to full-block integration",
+  "files": {
+    "frusium_loader.py": "355d1b734a9b1485ad1d75c3feceda09d59ad16315f39888b7626404cb6cc093",
+    "benchmark_layers.py": "2e714009f6b2dc9403eccbe3caac31541e09030bc584550eeaa796e87a8ed74d",
+    "expert_correctness.py": "c10f3e2412f6841e179ccbae0b379cc6d7eb0c0428bee48d7f08ec36fad80a77",
+    "streamed_moe.py": "4be133a4216174da8a29bc79bfccb5894198f0298aa7fcba0574aa1ce757b422",
+    "sparse_rows.py": "aaceb34a84d37ae9dd2809205c382fafebc33109e7dac50e228f8297b6ea38e4",
+    "block_primitives.py": "e7c3b926dd33ce4b24d749c9aa20d58aad223312b2acebb2982a2165db139618",
+    "moe_correctness_results.json": "c1ef985a79cb3dc879d901fc0bd8b654e25ea9652408bef3265e6986199d502a",
+    "expert_correctness_results.json": "7a2c151dd60d014f2bcd3e99f3d1be7ada78f5fab7c5d2b3fa2d89989e725d1a",
+    "sparse_rows_results.json": "cf3eba14f247973edf5e4400ea8a3048eeb34342398895f2db30809914faca07",
+    "block_primitives_results.json": "1431a550c1dc9ab19eb90232aa2f9e9d87f806a6bbda991b38f1a2ae4fe89a85"
+  }
+}

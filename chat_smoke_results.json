@@ -1,0 +1,17 @@
+{
+  "prompt": "Say hello.",
+  "reply": "Hello! \ud83d\udc4b How can",
+  "token_ids": [
+    19923,
+    3,
+    52780,
+    236,
+    1730,
+    588
+  ],
+  "layers": 40,
+  "seconds": 1117.5626168,
+  "peak_allocated_GiB": 2.2758970260620117,
+  "peak_reserved_GiB": 3.056640625,
+  "output_head_logical_bytes": 7942963200
+}

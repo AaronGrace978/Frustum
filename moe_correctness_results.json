@@ -1,0 +1,190 @@
+{
+  "status": "PASS",
+  "scope": "Independent MoE sublayers, NOT sequential transformer layers or generation",
+  "reference": "NumPy FP64 routing and matrix products; independent FP4/FP8 decode; shared PyTorch activation quantization/SwiGLU; not TileLang kernel parity",
+  "layers": [
+    {
+      "layer": 0,
+      "selected_experts": [
+        [
+          93,
+          54,
+          222,
+          333,
+          157,
+          4
+        ],
+        [
+          23,
+          61,
+          134,
+          347,
+          69,
+          58
+        ]
+      ],
+      "routing_weights": [
+        [
+          0.28413113951683044,
+          0.26432129740715027,
+          0.25178277492523193,
+          0.23008882999420166,
+          0.23145809769630432,
+          0.23821789026260376
+        ],
+        [
+          0.31030774116516113,
+          0.2557414472103119,
+          0.2688239812850952,
+          0.22956392168998718,
+          0.22107771039009094,
+          0.2144852876663208
+        ]
+      ],
+      "unique_routed_experts": 12,
+      "shared_expert": true,
+      "relative_L2_error": 0.0,
+      "cosine_similarity": 1.0,
+      "max_abs_error": 0.0
+    },
+    {
+      "layer": 1,
+      "selected_experts": [
+        [
+          277,
+          276,
+          331,
+          117,
+          128,
+          12
+        ],
+        [
+          127,
+          14,
+          341,
+          9,
+          207,
+          129
+        ]
+      ],
+      "routing_weights": [
+        [
+          0.26970672607421875,
+          0.25883978605270386,
+          0.24810831248760223,
+          0.24396654963493347,
+          0.23886479437351227,
+          0.2405138611793518
+        ],
+        [
+          0.2570369243621826,
+          0.26164594292640686,
+          0.2618938386440277,
+          0.2589157223701477,
+          0.2316822111606598,
+          0.22882530093193054
+        ]
+      ],
+      "unique_routed_experts": 12,
+      "shared_expert": true,
+      "relative_L2_error": 0.0,
+      "cosine_similarity": 1.0,
+      "max_abs_error": 0.0
+    },
+    {
+      "layer": 2,
+      "selected_experts": [
+        [
+          190,
+          327,
+          290,
+          269,
+          353,
+          55
+        ],
+        [
+          67,
+          130,
+          311,
+          147,
+          314,
+          132
+        ]
+      ],
+      "routing_weights": [
+        [
+          0.26544976234436035,
+          0.25475186109542847,
+          0.2544005811214447,
+          0.2468847781419754,
+          0.24339967966079712,
+          0.23511318862438202
+        ],
+        [
+          0.332924485206604,
+          0.2920973300933838,
+          0.2588743567466736,
+          0.2083846628665924,
+          0.20884788036346436,
+          0.19887122511863708
+        ]
+      ],
+      "unique_routed_experts": 12,
+      "shared_expert": true,
+      "relative_L2_error": 0.0,
+      "cosine_similarity": 1.0,
+      "max_abs_error": 0.0
+    },
+    {
+      "layer": 3,
+      "selected_experts": [
+        [
+          86,
+          330,
+          255,
+          373,
+          327,
+          188
+        ],
+        [
+          97,
+          200,
+          197,
+          145,
+          319,
+          333
+        ]
+      ],
+      "routing_weights": [
+        [
+          0.27758193016052246,
+          0.27731746435165405,
+          0.2501450777053833,
+          0.2352122664451599,
+          0.23071660101413727,
+          0.2290266454219818
+        ],
+        [
+          0.296869695186615,
+          0.2414984554052353,
+          0.24075539410114288,
+          0.24423694610595703,
+          0.23738130927085876,
+          0.2392582893371582
+        ]
+      ],
+      "unique_routed_experts": 12,
+      "shared_expert": true,
+      "relative_L2_error": 0.0,
+      "cosine_similarity": 1.0,
+      "max_abs_error": 0.0
+    }
+  ],
+  "logical_weight_read_MB": 1059.861504,
+  "peak_allocated_GiB": 0.4142899513244629,
+  "peak_reserved_GiB": 0.525390625,
+  "evictions": 39,
+  "cache_hits_including_prefetch": 48,
+  "expert_requests": 52,
+  "elapsed_including_CPU_validation": 75.10833640000055
+}

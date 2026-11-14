@@ -1,0 +1,231 @@
+{
+  "prompt": "Do you like Dino Buddies? \ud83e\udd96",
+  "reply": "I don't have personal feelings, so I can't \"like\" things the way you do \u2014 but I can definitely",
+  "token_ids": [
+    43,
+    2090,
+    1664,
+    611,
+    4323,
+    13227,
+    14,
+    832,
+    342,
+    588,
+    1664,
+    582,
+    8679,
+    4,
+    2924,
+    270,
+    1722,
+    440,
+    696,
+    2136,
+    790,
+    342,
+    588,
+    13533
+  ],
+  "layers": 40,
+  "seconds": 2705.3131934,
+  "peak_allocated_GiB": 9.28722620010376,
+  "peak_reserved_GiB": 11.126953125,
+  "output_head_mode": "resident",
+  "expert_cache_mib": 6144,
+  "output_head_logical_bytes": 1323827200,
+  "token_timings": [
+    {
+      "phase": "prefill",
+      "token_id": 43,
+      "backbone_seconds": 997.2940048999999,
+      "output_head_seconds": 33.57280320000018,
+      "total_seconds": 1030.8668081,
+      "head_logical_bytes": 1323827200
+    },
+    {
+      "phase": "decode",
+      "token_id": 2090,
+      "backbone_seconds": 259.9557863,
+      "output_head_seconds": 0.03147780000017519,
+      "total_seconds": 259.9872641000002,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 1664,
+      "backbone_seconds": 110.03900109999995,
+      "output_head_seconds": 0.03339060000007521,
+      "total_seconds": 110.07239170000003,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 611,
+      "backbone_seconds": 64.9774453,
+      "output_head_seconds": 0.0329330999998092,
+      "total_seconds": 65.01037839999981,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 4323,
+      "backbone_seconds": 62.60080270000026,
+      "output_head_seconds": 0.0336128999997527,
+      "total_seconds": 62.63441560000001,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 13227,
+      "backbone_seconds": 63.86968919999981,
+      "output_head_seconds": 0.032066499999928055,
+      "total_seconds": 63.90175569999974,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 14,
+      "backbone_seconds": 77.27543770000011,
+      "output_head_seconds": 0.03562099999999191,
+      "total_seconds": 77.3110587000001,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 832,
+      "backbone_seconds": 63.0108123,
+      "output_head_seconds": 0.03180340000017168,
+      "total_seconds": 63.04261570000017,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 342,
+      "backbone_seconds": 58.94808230000035,
+      "output_head_seconds": 0.03394049999951676,
+      "total_seconds": 58.98202279999987,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 588,
+      "backbone_seconds": 57.5275216,
+      "output_head_seconds": 0.03192180000041844,
+      "total_seconds": 57.55944340000042,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 1664,
+      "backbone_seconds": 64.41150259999995,
+      "output_head_seconds": 0.03459409999959462,
+      "total_seconds": 64.44609669999954,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 582,
+      "backbone_seconds": 49.48237909999989,
+      "output_head_seconds": 0.032768400000350084,
+      "total_seconds": 49.51514750000024,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 8679,
+      "backbone_seconds": 56.092386299999816,
+      "output_head_seconds": 0.03316460000041843,
+      "total_seconds": 56.125550900000235,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 4,
+      "backbone_seconds": 82.9940260000003,
+      "output_head_seconds": 0.03261060000022553,
+      "total_seconds": 83.02663660000053,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 2924,
+      "backbone_seconds": 51.14644260000023,
+      "output_head_seconds": 0.03137319999950705,
+      "total_seconds": 51.177815799999735,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 270,
+      "backbone_seconds": 69.46475199999986,
+      "output_head_seconds": 0.033049199999368284,
+      "total_seconds": 69.49780119999923,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 1722,
+      "backbone_seconds": 72.65830480000022,
+      "output_head_seconds": 0.033894299999701616,
+      "total_seconds": 72.69219909999993,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 440,
+      "backbone_seconds": 53.879326799999944,
+      "output_head_seconds": 0.03205629999956727,
+      "total_seconds": 53.91138309999951,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 696,
+      "backbone_seconds": 70.01003459999993,
+      "output_head_seconds": 0.03191479999986768,
+      "total_seconds": 70.0419493999998,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 2136,
+      "backbone_seconds": 51.078580800000054,
+      "output_head_seconds": 0.033091599999352184,
+      "total_seconds": 51.11167239999941,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 790,
+      "backbone_seconds": 72.63525500000014,
+      "output_head_seconds": 0.03212859999985085,
+      "total_seconds": 72.6673836,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 342,
+      "backbone_seconds": 53.66948110000067,
+      "output_head_seconds": 0.017268999999942025,
+      "total_seconds": 53.68675010000061,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 588,
+      "backbone_seconds": 53.18240750000041,
+      "output_head_seconds": 0.032888099999581755,
+      "total_seconds": 53.21529559999999,
+      "head_logical_bytes": 0
+    },
+    {
+      "phase": "decode",
+      "token_id": 13533,
+      "backbone_seconds": 54.794027100000676,
+      "output_head_seconds": 0.032116299999870535,
+      "total_seconds": 54.82614340000055,
+      "head_logical_bytes": 0
+    }
+  ]
+}
