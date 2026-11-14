@@ -8,6 +8,7 @@ not the supplied TileLang kernels or a full-model generation loop.
 import argparse
 import json
 import math
+import os
 import time
 from pathlib import Path
 
@@ -67,8 +68,8 @@ def fp4_quant_dequant(x, block_size, power2_scale):
     return (levels[nearest] * scale[..., None]).reshape(shape).to(torch.bfloat16)
 
 
-def sparse_attention(q, kv, sink, idxs):
-    """Small eager counterpart of sparse_attn: gather selected rows, then causal softmax."""
+def sparse_attention_reference(q, kv, sink, idxs):
+    """Original eager form: gather selected rows per token, then causal softmax. Kept as the oracle."""
     bsz, seqlen, heads, dim = q.shape
     out = torch.zeros_like(q)
     for batch in range(bsz):
@@ -83,6 +84,38 @@ def sparse_attention(q, kv, sink, idxs):
             prob = torch.exp(score - maximum)
             denom = prob.sum(-1, keepdim=True) + torch.exp(sink.float()[:, None] - maximum)
             out[batch, token] = (prob.to(torch.bfloat16).float() @ values / denom).to(q.dtype)
+    return out
+
+
+def sparse_attention(q, kv, sink, idxs, chunk=64):
+    """Sparse attention over selected rows; idxs < 0 marks an unused slot.
+
+    A single-token call (every decode step) runs the reference loop, so decode
+    arithmetic is exactly what it was. Longer calls (prefill) process `chunk`
+    tokens at a time with padded gathers instead of one Python iteration per
+    token. Same equation, but batched matrix products may round differently in
+    the last bit. FRUSIUM_ATTENTION=loop forces the reference everywhere.
+    """
+    bsz, seqlen, heads, dim = q.shape
+    if seqlen == 1 or idxs.shape[-1] == 0 or os.environ.get('FRUSIUM_ATTENTION') == 'loop':
+        return sparse_attention_reference(q, kv, sink, idxs)
+    out = torch.zeros_like(q)
+    scale = dim ** -0.5
+    sink_f = sink.float()[None, None, :, None]
+    batch = torch.arange(bsz, device=q.device)[:, None, None]
+    for start in range(0, seqlen, chunk):
+        ids = idxs[:, start:start + chunk]
+        valid = ids >= 0
+        values = kv[batch, ids.clamp_min(0).long()].float()  # [batch, tokens, slots, dim]
+        score = torch.einsum('bchd,bckd->bchk', q[:, start:start + chunk].float(), values) * scale
+        score = score.masked_fill(~valid[:, :, None, :], -torch.inf)
+        maximum = score.amax(-1, keepdim=True)
+        prob = torch.exp(score - maximum)
+        denom = prob.sum(-1, keepdim=True) + torch.exp(sink_f - maximum)
+        mixed = torch.einsum('bchk,bckd->bchd', prob.to(torch.bfloat16).float(), values) / denom
+        # A token with no selected rows contributes zeros, as in the reference.
+        mixed = torch.where(valid.any(-1)[:, :, None, None], mixed, torch.zeros_like(mixed))
+        out[:, start:start + chunk] = mixed.to(q.dtype)
     return out
 
 
@@ -584,7 +617,22 @@ def primitive_tests():
         expected[0, pos] = pb @ values / (p.sum(-1, keepdims=True) + np.exp(sink.cpu().numpy()[:, None] - mx))
     np.testing.assert_allclose(actual, expected, rtol=.015, atol=.01)
     changed = kv.clone(); changed[:, 3] *= 100
-    torch.testing.assert_close(sparse_attention(q, changed, sink, ids)[:, :3], torch.from_numpy(actual[:, :3]).cuda().to(torch.bfloat16), rtol=0, atol=0)
+    # Causality: scaling the last key must not move earlier tokens. Exact for the reference loop;
+    # the batched path is held to rounding tolerance (a leak would be a 100x change).
+    torch.testing.assert_close(sparse_attention_reference(q, changed, sink, ids)[:, :3], sparse_attention_reference(q, kv, sink, ids)[:, :3], rtol=0, atol=0)
+    torch.testing.assert_close(sparse_attention(q, changed, sink, ids)[:, :3].float(), torch.from_numpy(actual[:, :3]).cuda(), rtol=.02, atol=.01)
+    # Batched path against the reference loop: padded slots, holes and a token with no rows.
+    generator = torch.Generator().manual_seed(11)
+    bq = torch.randn(2, 70, 3, 8, generator=generator).to(torch.bfloat16).cuda()
+    bkv = torch.randn(2, 40, 8, generator=generator).to(torch.bfloat16).cuda()
+    bids = torch.randint(0, 40, (2, 70, 12), generator=generator).sort(-1).values
+    bids[torch.rand(2, 70, 12, generator=generator) < .3] = -1
+    bids[:, 5] = -1
+    bids = bids.int().cuda()
+    batched, looped = sparse_attention(bq, bkv, sink, bids, chunk=32), sparse_attention_reference(bq, bkv, sink, bids)
+    torch.testing.assert_close(batched.float(), looped.float(), rtol=.02, atol=.01)
+    if batched[:, 5].abs().max().item() != 0 or not torch.isfinite(batched).all():
+        raise AssertionError('Batched attention mishandled a token with no selected rows')
     ring = RingKV(3)
     for pos in range(8):
         ring.append(torch.full((1, 1, 8), float(pos), device='cuda', dtype=torch.bfloat16), pos)
@@ -594,7 +642,7 @@ def primitive_tests():
     compressed = fp4_quant_dequant(torch.randn(2, 32, device='cuda'), 16, power2_scale=False)
     if not torch.isfinite(compressed).all():
         raise AssertionError('FP4 compressed activation quantization produced nonfinite values')
-    return ['sparse attention NumPy oracle', 'causal future-token masking', 'KV ring wraparound', 'YaRN RoPE inverse', 'compressed FP4 quantization finite']
+    return ['sparse attention NumPy oracle', 'batched attention vs reference loop', 'causal future-token masking', 'KV ring wraparound', 'YaRN RoPE inverse', 'compressed FP4 quantization finite']
 
 
 @torch.inference_mode()
