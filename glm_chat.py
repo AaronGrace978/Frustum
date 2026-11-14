@@ -2,8 +2,8 @@
 import argparse
 import ctypes
 import os
-from collections import OrderedDict
 from pathlib import Path
+from types import SimpleNamespace
 import json
 import time
 
@@ -12,7 +12,8 @@ from tokenizers import Tokenizer
 import torch
 import torch.nn.functional as F
 
-from frusium_loader import RangeReader, TensorRange
+from expert_cache import TieredExpertCache
+from frusium_loader import TensorRange
 from phi4_chat import unpack
 
 GIB = 2**30
@@ -59,28 +60,33 @@ def decode_weight(raw, kind):
 
 
 class Glm:
-    def __init__(self, path, budget, *, split=False, ram_budget=0):
+    def __init__(self, path, budget, *, split=False, ram_budget=0, io_threads=4, lookahead=4):
+        """budget: GPU bytes for packed weights. split pins always-used tensors so only routed
+        expert slices compete for the rest. ram_budget adds a host-RAM tier for those slices.
+
+        Storage is the shared expert_cache.TieredExpertCache (the same code the DeepSeek path
+        uses), with LRU in both tiers as before. Arithmetic is unchanged.
+        """
         self.path = path
         self.gguf = GGUFReader(path)
         if self.gguf.fields['general.architecture'].contents() != 'deepseek2' or self.gguf.fields['general.name'].contents() != 'GLM 4.7 Flash':
             raise ValueError('Expected the GLM-4.7-Flash deepseek2 GGUF')
         self.tensors = {t.name: t for t in self.gguf.tensors}
-        self.reader = RangeReader()
-        self.weights = OrderedDict()
-        self.budget, self.used = budget, 0
+        self.budget = budget
         self.split = split
-        self.fixed = {}
-        self.fixed_bytes = 0
         self.fixed_budget = sum(t.n_bytes for name, t in self.tensors.items()
                                 if '_exps.' not in name) if split else 0
         self.dynamic_budget = budget - self.fixed_budget
         if self.dynamic_budget <= 0:
             raise ValueError('GPU budget cannot reserve all always-used tensors')
-        self.ram = OrderedDict()
         self.ram_budget = min(ram_budget, max(0, available_ram() - 4 * GIB)) if ram_budget else 0
-        self.ram_used = 0
-        self.stats = dict(gpu_hits=0, ram_hits=0, file_reads=0, transfer_bytes=0,
-                          file_read_seconds=0., blocking_upload_seconds=0.)
+        # One cache entry per whole tensor (expert None) or per expert slice of a stacked tensor.
+        self.ranges = SimpleNamespace(tensors={})
+        self.pinned = (lambda key: key[1] is None) if split else (lambda key: False)
+        self.store = TieredExpertCache(torch, self.ranges, 'cuda', budget, self.ram_budget, io_threads=io_threads,
+                                       gpu_policy='lru', host_policy='lru', pinned=self.pinned)
+        self.reader = self.store.reader
+        self.lookahead = lookahead
         self.norm_eps = 1e-5
         self.freq = 1e6 ** (-torch.arange(0, 64, 2, device='cuda').float() / 64)
         self.cache = {}
@@ -93,72 +99,45 @@ class Glm:
         self.pos = 0
 
     def metrics(self):
-        return {**self.stats, 'file_bytes': self.reader.bytes_read, 'ram_bytes': self.ram_used,
-                'gpu_fixed_bytes': self.fixed_bytes, 'gpu_dynamic_bytes': self.used}
+        store = self.store
+        fixed = sum(size for key, size in store.gpu.order.items() if self.pinned(key))
+        return dict(gpu_hits=store.hits, ram_hits=store.host_hits, file_reads=store.disk_reads,
+                    transfer_bytes=store.upload_bytes, file_read_seconds=store.wait_seconds,
+                    blocking_upload_seconds=store.upload_seconds, file_bytes=self.reader.bytes_read,
+                    ram_bytes=store.host.used, gpu_fixed_bytes=fixed, gpu_dynamic_bytes=store.used - fixed)
 
-    def host_weight(self, key, view, cacheable):
-        if key in self.ram:
-            self.stats['ram_hits'] += 1
-            self.ram.move_to_end(key)
-            return self.ram[key]
-        size = view.size
-        retain = cacheable and size <= self.ram_budget
-        if retain:
-            while self.ram_used + size > self.ram_budget:
-                _, old = self.ram.popitem(last=False)
-                self.ram_used -= len(old)
-                del old
-        host = bytearray(size)
-        started = time.perf_counter()
-        self.reader.copy(view, lambda i, data: host.__setitem__(slice(i, i + len(data)), data))
-        self.stats['file_read_seconds'] += time.perf_counter() - started
-        self.stats['file_reads'] += 1
-        if retain:
-            self.ram[key] = host
-            self.ram_used += size
-        return host
+    def _key(self, name, expert=None):
+        key = (name, expert)
+        if key not in self.store.plan:
+            tensor = self.tensors[name]
+            shape = tensor.data.shape
+            size = tensor.n_bytes
+            offset = tensor.data_offset
+            if expert is not None:
+                size //= shape[0]
+                offset += expert * size
+                shape = shape[1:]
+            self.ranges.tensors[key] = TensorRange(name, self.path, offset, size, tensor.tensor_type.name, shape)
+            self.store.plan[key] = [key]
+        return key
+
+    def prefetch(self, keys):
+        """Start background reads for (name, expert) pairs that are about to be used."""
+        self.store.prefetch([self._key(name, expert) for name, expert in keys])
 
     def packed(self, name, expert=None):
-        key = (name, expert)
-        if key in self.fixed:
-            self.stats['gpu_hits'] += 1
-            return self.fixed[key]
-        if key in self.weights:
-            self.stats['gpu_hits'] += 1
-            self.weights.move_to_end(key)
-            return self.weights[key]
-        tensor = self.tensors[name]
-        shape = tensor.data.shape
-        size = tensor.n_bytes
-        offset = tensor.data_offset
-        if expert is not None:
-            size //= shape[0]
-            offset += expert * size
-            shape = shape[1:]
-        kind = tensor.tensor_type.name
-        view = TensorRange(name, self.path, offset, size, kind, shape)
-        fixed = self.split and expert is None
-        if not fixed:
-            if size > self.dynamic_budget:
-                raise ValueError(f'Tensor exceeds dynamic GPU cache budget: {name}')
-            while self.used + size > self.dynamic_budget:
-                _, (old, _) = self.weights.popitem(last=False)
-                self.used -= old.numel() * old.element_size()
-                del old
-        host = self.host_weight(key, view, cacheable=not fixed)
-        started = time.perf_counter()
-        raw = torch.frombuffer(host, dtype=torch.uint8).cuda()
-        self.stats['blocking_upload_seconds'] += time.perf_counter() - started
-        self.stats['transfer_bytes'] += size
-        raw = raw.view(torch.float32) if kind == 'F32' else raw
-        entry = raw.reshape(shape), kind
-        if fixed:
-            self.fixed[key] = entry
-            self.fixed_bytes += size
-        else:
-            self.weights[key] = entry
-            self.used += size
-        return entry
+        key = self._key(name, expert)
+        entry = self.store.get(key, (key,))
+        shaped = getattr(entry, 'shaped', None)
+        if shaped is None:
+            view = self.ranges.tensors[key]
+            raw = entry.tensors[0]
+            raw = raw.view(torch.float32) if view.dtype == 'F32' else raw
+            shaped = entry.shaped = (raw.reshape(view.shape), view.dtype)
+        return shaped
+
+    def close(self):
+        self.store.close()
 
     def linear(self, x, name, expert=None):
         raw, kind = self.packed(name + '.weight', expert)
@@ -203,7 +182,12 @@ class Glm:
         mix = score.gather(-1, indices)
         mix = mix / mix.sum(-1, keepdim=True) * 1.8
         result = self.mlp(x, p, '_shexp').float()
-        for expert in sorted(set(indices.flatten().tolist())):
+        experts = sorted(set(indices.flatten().tolist()))
+        wanted = [(p + part + '_exps.weight', expert) for expert in experts
+                  for part in ('ffn_gate', 'ffn_up', 'ffn_down')]
+        for position, expert in enumerate(experts):
+            # Routing is known; read the next few expert slices while this one computes.
+            self.prefetch(wanted[3 * position:3 * (position + 1 + self.lookahead)])
             rows, rank = torch.where(indices == expert)
             result.index_add_(0, rows, self.mlp(x[rows], p, '_exps', expert).float() * mix[rows, rank, None])
         return result.to(x.dtype)
