@@ -1,0 +1,128 @@
+{
+  "arithmetic": {
+    "all_miss_bytes_per_token": 4512153600,
+    "scenarios": [
+      {
+        "miss_fraction": 1.0,
+        "drive_MBps": 250,
+        "GB_per_token": 4.51,
+        "drive_seconds_per_token": 18.05
+      },
+      {
+        "miss_fraction": 1.0,
+        "drive_MBps": 500,
+        "GB_per_token": 4.51,
+        "drive_seconds_per_token": 9.02
+      },
+      {
+        "miss_fraction": 1.0,
+        "drive_MBps": 1000,
+        "GB_per_token": 4.51,
+        "drive_seconds_per_token": 4.51
+      },
+      {
+        "miss_fraction": 1.0,
+        "drive_MBps": 3000,
+        "GB_per_token": 4.51,
+        "drive_seconds_per_token": 1.5
+      },
+      {
+        "miss_fraction": 0.75,
+        "drive_MBps": 250,
+        "GB_per_token": 3.38,
+        "drive_seconds_per_token": 13.54
+      },
+      {
+        "miss_fraction": 0.75,
+        "drive_MBps": 500,
+        "GB_per_token": 3.38,
+        "drive_seconds_per_token": 6.77
+      },
+      {
+        "miss_fraction": 0.75,
+        "drive_MBps": 1000,
+        "GB_per_token": 3.38,
+        "drive_seconds_per_token": 3.38
+      },
+      {
+        "miss_fraction": 0.75,
+        "drive_MBps": 3000,
+        "GB_per_token": 3.38,
+        "drive_seconds_per_token": 1.13
+      },
+      {
+        "miss_fraction": 0.5,
+        "drive_MBps": 250,
+        "GB_per_token": 2.26,
+        "drive_seconds_per_token": 9.02
+      },
+      {
+        "miss_fraction": 0.5,
+        "drive_MBps": 500,
+        "GB_per_token": 2.26,
+        "drive_seconds_per_token": 4.51
+      },
+      {
+        "miss_fraction": 0.5,
+        "drive_MBps": 1000,
+        "GB_per_token": 2.26,
+        "drive_seconds_per_token": 2.26
+      },
+      {
+        "miss_fraction": 0.5,
+        "drive_MBps": 3000,
+        "GB_per_token": 2.26,
+        "drive_seconds_per_token": 0.75
+      },
+      {
+        "miss_fraction": 0.25,
+        "drive_MBps": 250,
+        "GB_per_token": 1.13,
+        "drive_seconds_per_token": 4.51
+      },
+      {
+        "miss_fraction": 0.25,
+        "drive_MBps": 500,
+        "GB_per_token": 1.13,
+        "drive_seconds_per_token": 2.26
+      },
+      {
+        "miss_fraction": 0.25,
+        "drive_MBps": 1000,
+        "GB_per_token": 1.13,
+        "drive_seconds_per_token": 1.13
+      },
+      {
+        "miss_fraction": 0.25,
+        "drive_MBps": 3000,
+        "GB_per_token": 1.13,
+        "drive_seconds_per_token": 0.38
+      },
+      {
+        "miss_fraction": 0.1,
+        "drive_MBps": 250,
+        "GB_per_token": 0.45,
+        "drive_seconds_per_token": 1.8
+      },
+      {
+        "miss_fraction": 0.1,
+        "drive_MBps": 500,
+        "GB_per_token": 0.45,
+        "drive_seconds_per_token": 0.9
+      },
+      {
+        "miss_fraction": 0.1,
+        "drive_MBps": 1000,
+        "GB_per_token": 0.45,
+        "drive_seconds_per_token": 0.45
+      },
+      {
+        "miss_fraction": 0.1,
+        "drive_MBps": 3000,
+        "GB_per_token": 0.45,
+        "drive_seconds_per_token": 0.15
+      }
+    ]
+  },
+  "runs": {}
+}

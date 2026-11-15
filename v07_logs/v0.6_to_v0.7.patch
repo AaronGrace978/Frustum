@@ -1,0 +1,2425 @@
+diff --git a/CHANGES_v0.7.md b/CHANGES_v0.7.md
+new file mode 100644
+index 0000000..18ddff2
+--- /dev/null
++++ b/CHANGES_v0.7.md
+@@ -0,0 +1,158 @@
++# Frustum_loader v0.7 working notes (uncommitted, GPU path unrun)
++
++Base: `ed3a77f` (v0.6.0). Nothing here is committed. Nothing here has run on the RTX 5060 Ti
++or against the checkpoint: the development sandbox had no GPU, no PyTorch and no weights.
++Every number below is either arithmetic, a replay of routing you recorded earlier, or a
++unit-test result, and is labelled as such. No benchmark result is claimed.
++
++## 1. Audit of v0.6
++
++| Finding | Where | Consequence |
++|---|---|---|
++| No saved run separates drive time from GPU time for v0.5.1/v0.6. The only per-layer profiles are v0.4 (USB 2.0 era). `wait_seconds` exists but is not reported per token. | `frustum_chat.py`, saved JSONs | The roofline cannot be closed from existing evidence. |
++| The "8 s/token" figure is 192.2 s / 24 tokens and includes prefill. | README, whitepaper | Decode-only s/token for v0.5.1 is not recorded. |
++| Byte counters are logical. Reads are buffered, so the Windows file cache can serve them. | `RangeReader` | "Cold" and "warm" were never distinguished. |
++| Next-layer guesses were queued at the *start* of layer N, and nothing cancelled a guess once a reader thread picked it up. By the time layer N+1 routed, the four readers had worked through the queue. | `streamed_moe.forward`, `discard_pending` | Nearly every wrong guess was read in full, then dropped. |
++| The guess uses layer N's MoE input on layer N+1's router. The real input to that router also contains layer N's MoE output and layer N+1's attention. Recall was never saved. | `_predict` | Guess quality is unknown and plausibly poor. |
++| `get(key, (key,))` protected only the expert being loaded. Loading one expert of a layer could evict another expert of the same layer that had not run yet (GPU tier), or drop its only RAM copy (host tier). | `expert_cache.get`, `_remember` | A hit becomes a re-read. Rare under LFU (ties only), possible under LRU. |
++| Each expert was six positioned reads (three weights, three scales). | `_read` | Six syscalls where one suffices if the tensors are adjacent on disk. |
++| Host tier is sized once at start-up and never gives RAM back. | `placement.plan` | Can push the machine into paging if other programs grow. |
++| Component tests need CUDA; `selftest.py` cache tests need PyTorch. Full-model parity is still open. | tests | Unchanged by this work. |
++
++## 2. Roofline (arithmetic and replay, not measurement)
++
++One routed expert is 18,800,640 bytes; 6 experts x 40 layers = 4.51 GB if nothing is cached.
++
++| Bytes read per token | at 250 MB/s | at 500 MB/s | at 1 GB/s | at 3 GB/s |
++|---|---|---|---|---|
++| 4.51 GB (no reuse) | 18.0 s | 9.0 s | 4.5 s | 1.5 s |
++| 2.26 GB (half reused) | 9.0 s | 4.5 s | 2.3 s | 0.8 s |
++| 1.13 GB | 4.5 s | 2.3 s | 1.1 s | 0.4 s |
++
++Replay of the only routing on file (`decode_profile_results.json`, two decode steps, v0.4,
++"Say hello."; log in `v07_logs/replay_saved_v04_profile_sandbox.log`):
++
++- 49.6% of the second token's experts were used by the first token.
++- With any RAM tier of 8 GiB or more, the second token still reads 121 experts = 2.27 GB, and
++  **all of it is first-time reads**. No cache size or policy changes that number.
++- Layer protection makes no difference in this replay.
++
++Reading: at about 500 MB/s, 2.27 GB is about 4.5 s, so storage plausibly accounts for half or
++more of an 8 s token early in a conversation, and those bytes are ones a RAM cache cannot
++remove. Two decode steps cannot show how fast first-time reads decay as a conversation goes
++on. That is the measurement to take first (section 5).
++
++### Why next-layer prediction lost (inference from arithmetic; recall was not recorded)
++
++6 guesses x 40 layers x 18.8 MB = 4.5 GB per token. At 500 MB/s that is about 9 s. The
++observed slowdown was 192 s -> about 420 s for 24 tokens, i.e. about +9.5 s per token. The
++slowdown equals the cost of reading essentially every guess and using essentially none. That
++fits the two audit findings above: guesses were not cancellable in time, and the predictor's
++input is not the router's real input. It also means the drive had no idle time to absorb them.
++
++## 3. Ranked plan
++
++| # | Bottleneck | Mechanism | Expected benefit | Correctness risk | How to measure | Status |
++|---|---|---|---|---|---|---|
++| 1 | Unknown split of a token between drive and GPU | I/O ledger, physical device counters, `roofline.py`, `bench_e2e.py` | None by itself; decides everything below | None (no decision or arithmetic changes) | It is the measurement | Implemented |
++| 2 | First-time expert reads over USB (2.27 GB on token 2 in the replay) | Spill tier: CRC-verified exact copies of experts on a faster internal drive, read before the checkpoint drive | Up to (USB time for those bytes) x (1 - USB speed / internal speed), if the roofline says storage-bound. Zero if compute-bound or the internal drive is not faster | Low: bytes are verified against identity + CRC-32; any mismatch falls back to the checkpoint | `bench_e2e.py --configs patch spill --spill-dir ...`: physical bytes on the model drive, s/token | Implemented, opt-in |
++| 3 | Wrong guesses stealing drive time | Guesses issued after the layer's own reads; scored in shadow; read only while measured precision of not-yet-resident guesses >= 0.6; cancelled or counted as waste | Unknown until shadow precision is measured. Negative if precision is low, which the gate prevents | None: the real router still selects; guesses only move reads earlier | `--configs shadow gated`: `prediction.sources.*.cold_precision`, `speculative_wasted_bytes`, s/token | Implemented, off by default |
++| 4 | Same-layer self-eviction | `begin_layer` protects the whole layer in both tiers | Small. Zero in the saved replay | None (eviction choice only) | `repeat_expert_bytes_per_token` baseline vs patch | Implemented, on |
++| 5 | Six reads per expert | One coalesced read per contiguous expert | Small; fewer syscalls, same bytes | None (same bytes; tested) | `effective_MBps` baseline vs patch | Implemented, on |
++| 6 | Host tier never yields RAM | Shrink-only guard below a free-RAM floor | Safety, not speed | None | `host_shrinks` in stats | Implemented, on (3 GiB) |
++| 7 | Drive idle while a resident expert computes | Run resident experts first, accumulate in the original order | Small within a layer | Medium: must keep summation order bit-identical | `overlap_fraction` | Not built; only if the roofline shows idle drive time |
++| 8 | Buffered reads double-cache in RAM | Unbuffered (`FILE_FLAG_NO_BUFFERING`) aligned reads | Unknown | Low | `physical_over_logical`, `effective_MBps` | Not built |
++| 9 | Follow-up turns re-prefill when re-tokenised history differs | Build the next prompt from generated token ids | Fewer rebuilds | Medium: differs from the official encoder's tokenisation | `reused_prompt_tokens` | Not built |
++| 10 | Fused kernels, FP4 on Tensor Cores | - | Only if the roofline says compute-bound | - | `run_fused_check.ps1`, `speed_check.py` | Untouched. No native FP4 Tensor Core path exists or is claimed |
++| 11 | ActivatePrime streaming / cancel / progress | - | Usability | - | - | Not touched: its source is outside the folder shared for this session |
++
++## 4. What changed (small patches, all switchable)
++
++| File | Change | Switch back |
++|---|---|---|
++| `io_ledger.py` (new) | Thread-safe accounting: unique vs repeated bytes, drive-busy interval union, queue depth, blocked time, overlap, speculative outcomes | - |
++| `os_cache.py` (new) | Physical device bytes (Windows `IOCTL_DISK_PERFORMANCE`, Linux sysfs); best-effort file-cache purge | - |
++| `spill_tier.py` (new) | Optional verified local copies of experts | omit `--spill-dir` |
++| `roofline.py`, `bench_e2e.py`, `run_bench.ps1` (new) | Roofline report; cold/warm, >= 3 runs, median/p95 | - |
++| `selftest_v07.py`, `run_selftest_v07.ps1` (new) | Tests below | - |
++| `frustum_loader.py` | `RangeReader.read_group` | `FRUSTUM_COALESCE=0` |
++| `cache_policy.py` | `Tier.admit(protected=)`; `simulate(group=)`; unique/repeat bytes in replay | default arguments = old behaviour |
++| `expert_cache.py` | `begin_layer`, coalesced reads, speculative bookkeeping, ledger, RAM guard, spill hook | `FRUSTUM_PROTECT_LAYER=0`, `FRUSTUM_COALESCE=0`, `--ram-floor-gib 0` |
++| `streamed_moe.py` | `begin_layer` call; guesses issued after the layer; two scored sources; `predict_mode` | `--predict-next 0` (default); `--predict-mode always` = v0.6 policy |
++| `frustum_chat.py` | `--predict-mode`, `--trace-routing`, `--spill-dir/--spill-gib`, `--ram-floor-gib`; per-step `io`, physical bytes, a second summary line | flags above; `--legacy` unchanged |
++| `decode_cache_replay.py` | Accepts `--trace-routing` evidence; host policy and layer protection sweeps | - |
++
++Not changed: model arithmetic, routing, weights, fused kernels, attention, prefix-reuse logic,
++GLM/Phi backends (they use the same cache through the unchanged API), README, whitepaper,
++version number. `v07_logs/v0.6_to_v0.7.patch` is the full diff against `ed3a77f`.
++
++Hard constraints: a selected expert is always the one that runs (guesses only start reads
++early; a miss still reads the selected expert). No weight is modified; the spill tier writes
++copies elsewhere and never touches the checkpoint. The reference path (`--no-fused`,
++`--legacy`, `validate=True`) is intact.
++
++## 5. Tests and their status
++
++`python selftest_v07.py` (or `.\run_selftest_v07.ps1`): 29 tests.
++
++| Area | Tests | Sandbox result |
++|---|---|---|
++| I/O ledger: interval union, queue depth, overlap, unique/repeat, thread balance | 4 | PASS |
++| Coalesced reads equal per-tensor reads; gaps; mmap mode | 3 | PASS |
++| Cache eviction: layer protection (GPU and host tier), fallback when a tier is smaller than a layer, protected admission, replay accounting | 4 | PASS (cache driven through a NumPy stand-in for four torch calls) |
++| Speculative reads: cancel / waste / adopt accounting | 2 | PASS (stand-in) |
++| Async safety: 6 seeds x 250 random prefetch/discard/get rounds with 1 or 4 reader threads, every returned buffer byte-compared with the checkpoint; failed read surfaces and leaves the cache usable | 2 | PASS (stand-in) |
++| RAM guard | 1 | PASS (stand-in) |
++| Spill tier: exact bytes across sessions; flipped bit, truncation and changed checkpoint rejected; budget | 3 | PASS (stand-in, Linux) |
++| Prefix reuse: 200 random multi-turn conversations give the same tokens with and without reuse; strict-prefix rule; interrupted step forces rebuild | 3 | PASS |
++| Roofline verdicts | 2 | PASS |
++| Routing vs float64 reference; FP4 exhaustive + fast-path bit equality; FP8 all finite codes with block scales; RMSNorm / mHC pre, post, mixes vs float64; prediction gate | 5 | **SKIPPED: need PyTorch. UNRUN.** |
++
++Existing `selftest.py`: 30 tests, 9 errors, 1 skip both before and after the patch in the
++sandbox; all 9 are `No module named 'torch'`. Its six `ExpertCacheTests` pass against the
++patched cache with the stand-in. Logs are in `v07_logs/`.
++
++**Unrun or unverified**
++
++- Everything on the GPU: `streamed_moe.py` and `frustum_chat.py` changes were only byte-compiled.
++- All Windows-specific code: `IOCTL_DISK_PERFORMANCE`, the cache purge, spill-file replace.
++- The purge relies on observed Windows behaviour, not a documented guarantee. The benchmark
++  flags `cold_not_achieved` instead of trusting it.
++- Whether expert tensors are adjacent in the shards (coalescing falls back to separate reads if not).
++- Any speed effect of any change.
++
++## 6. First session on the real machine
++
++    .\run_selftest.ps1 ; .\run_selftest_v07.ps1          # both should pass with PyTorch present
++    .\run_verify.ps1                                      # layer-0 hash and "Say hello." token ids vs v0.4
++    .\run_bench.ps1 --configs baseline patch shadow       # about 18 fresh processes; hours on DeepSeek
++    python roofline.py bench_runs\<stamp>\patch_cold_0.json bench_runs\<stamp>\patch_warm_0.json
++
++Then decide from the verdict line:
++
++- Storage-bound, mostly first-time bytes: `.\run_bench.ps1 --configs patch spill --spill-dir D:\frustum_spill`
++  (any internal SSD with room; 64 GiB default budget holds about 3,400 experts).
++- Storage-bound, mostly re-reads: raise `--host-cache-gib`, and replay the trace:
++  `python decode_cache_replay.py bench_runs\<stamp>\patch_cold_0.json --summary --host-policy lru lfu`.
++- Idle drive time and `shadow` shows `cold_precision` of 0.6 or more for a source: add `gated`.
++- Compute-bound: storage work is finished; profile kernels and uploads.
++
++For a true v0.6 baseline alongside the flag baseline:
++
++    git worktree add ..\Frustum_v06 ed3a77f
++    .\run_bench.ps1 --baseline-dir ..\Frustum_v06
++
++Token ids must be identical across configurations (`results.md`, last line). If they are not,
++stop and keep the evidence: these patches are not supposed to be able to change a token.
++
++## 7. Rollback
++
++Per feature: the switches in section 4.
++Everything (nothing is committed):
++
++    git checkout -- cache_policy.py decode_cache_replay.py expert_cache.py frustum_chat.py frustum_loader.py streamed_moe.py
++    del io_ledger.py os_cache.py spill_tier.py roofline.py bench_e2e.py run_bench.ps1 selftest_v07.py run_selftest_v07.ps1 CHANGES_v0.7.md
++    rmdir /s v07_logs
++
++Or apply in reverse: `git apply -R v07_logs\v0.6_to_v0.7.patch`. The spill folder, if you
++created one, is separate: delete it by hand.
+diff --git a/bench_e2e.py b/bench_e2e.py
+new file mode 100644
+index 0000000..e2ad21b
+--- /dev/null
++++ b/bench_e2e.py
+@@ -0,0 +1,271 @@
++"""Repeatable end-to-end benchmark for DeepSeek chat: cold and warm OS cache, several runs.
++
++    python bench_e2e.py                               patch (current code) vs in-tree baseline flags
++    python bench_e2e.py --baseline-dir ..\\Frustum_v06  also run an untouched v0.6 checkout
++    python bench_e2e.py --configs patch spill --spill-dir D:\\frustum_spill
++    python bench_e2e.py --runs 5 --tokens 24 --prompt "..."
++
++Every measurement is one fresh process running frustum_chat.py with --evidence, so the
++application caches (GPU tier, RAM tier) always start empty. Per configuration and repetition:
++  cold  the checkpoint shards are purged from the OS file cache first (os_cache.py)
++  warm  the same command again straight after, with whatever the OS kept in RAM
++Cold is verified, not assumed: a cold run whose physical device bytes are under 80% of the
++logical bytes it requested is flagged `cold_not_achieved` (the purge did not work, or the
++counter is unavailable) and should not be read as a cold number.
++
++Reported per configuration and cache state, as median and p95 over the runs (with three
++runs p95 is close to the slowest run): time to first token, seconds per decode token,
++physical device bytes, logical bytes, first-time vs re-read expert bytes per token,
++re-read amplification, GPU / RAM / spill / drive hit rates, effective MB/s while the drive
++was busy, mean queue depth, drive utilisation and compute/transfer overlap. Token ids are
++compared across configurations: the patch changes no arithmetic, so they must be equal.
++
++Configurations
++  baseline  current code with v0.7 behaviour switched off (FRUSTUM_COALESCE=0,
++            FRUSTUM_PROTECT_LAYER=0, no prediction). Same instrumentation, old I/O behaviour.
++  patch     current defaults.
++  shadow    patch + --predict-next 6 --predict-mode shadow: measures guess precision, reads nothing.
++  gated     patch + --predict-next 6 (reads guesses only while measurably right).
++  spill     patch + --spill-dir (needs --spill-dir; its first cold run fills the tier).
++  v06       frustum_chat.py from --baseline-dir. It has no I/O ledger, so only timings,
++            token ids and physical device bytes are available for it.
++
++STATUS: the aggregation is unit-checked (python bench_e2e.py --self-test). The benchmark
++itself is UNRUN: it needs the GPU and the checkpoint.
++"""
++import argparse
++import json
++import os
++from pathlib import Path
++import statistics
++import subprocess
++import sys
++import time
++
++import os_cache
++
++HERE = Path(__file__).resolve().parent
++CONFIGS = {
++    'baseline': (['--predict-next', '0'], {'FRUSTUM_COALESCE': '0', 'FRUSTUM_PROTECT_LAYER': '0'}),
++    'patch': (['--predict-next', '0'], {}),
++    'shadow': (['--predict-next', '6', '--predict-mode', 'shadow'], {}),
++    'gated': (['--predict-next', '6', '--predict-mode', 'gated'], {}),
++    'spill': (['--predict-next', '0'], {}),
++    'v06': (['--predict-next', '0'], {}),
++}
++
++
++def percentile(values, q):
++    """Linear-interpolated percentile of a non-empty list."""
++    ordered = sorted(values)
++    position = (len(ordered) - 1) * q
++    low = int(position)
++    high = min(low + 1, len(ordered) - 1)
++    return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
++
++
++def summarize(values):
++    values = [v for v in values if v is not None]
++    if not values:
++        return None
++    return dict(median=statistics.median(values), p95=percentile(values, 0.95), min=min(values), max=max(values),
++                n=len(values))
++
++
++def metrics(evidence, physical, seconds):
++    """Flatten one run into the reported numbers. Works for v0.6 evidence too (fewer fields)."""
++    summary = evidence['summary']
++    io = summary.get('decode_io') or {}
++    steps = [t['io'] for t in evidence['token_timings'] if t['phase'] == 'decode' and 'io' in t]
++    total = lambda name: sum(step[name] for step in steps) if steps else None
++    requests = total('requests')
++    rate = lambda name: (total(name) / requests) if requests else None
++    unique, repeat = io.get('unique_bytes_per_token'), io.get('repeat_bytes_per_token')
++    return dict(
++        ttft_seconds=summary['first_token_seconds'],
++        seconds_per_token=summary['mean_decode_seconds'],
++        process_seconds=seconds,
++        physical_bytes=physical['bytes_read'] if physical else None,
++        logical_bytes=summary['disk_bytes'],
++        physical_over_logical=(physical['bytes_read'] / summary['disk_bytes'])
++        if physical and summary['disk_bytes'] else None,
++        unique_expert_bytes_per_token=unique, repeat_expert_bytes_per_token=repeat,
++        reread_amplification=((unique + repeat) / unique) if unique else None,
++        gpu_hit_rate=rate('gpu_hits'), host_hit_rate=rate('host_hits'),
++        spill_hit_rate=rate('spill_hits') if steps and 'spill_hits' in steps[0] else None,
++        drive_hit_rate=rate('disk_reads'),
++        effective_MBps=io.get('effective_MBps'), mean_queue_depth=io.get('mean_queue_depth'),
++        drive_utilization=io.get('drive_utilization'), overlap_fraction=io.get('overlap_fraction'))
++
++
++def aggregate(runs):
++    """runs: list of dict(config, state, metrics, token_ids, flags). Returns the report table."""
++    table = {}
++    for run in runs:
++        table.setdefault(run['config'], {}).setdefault(run['state'], []).append(run)
++    report = {}
++    for config, states in table.items():
++        report[config] = {}
++        for state, items in states.items():
++            names = items[0]['metrics'].keys()
++            report[config][state] = dict(
++                {name: summarize([item['metrics'][name] for item in items]) for name in names},
++                runs=len(items), flags=sorted({flag for item in items for flag in item['flags']}))
++    tokens = {config: {tuple(item['token_ids']) for state in states.values() for item in state}
++              for config, states in table.items()}
++    first = next(iter(tokens.values())) if tokens else set()
++    report['_token_ids'] = dict(
++        identical_within_each_config=all(len(ids) == 1 for ids in tokens.values()),
++        identical_across_configs=all(ids == first for ids in tokens.values()) and len(first) == 1)
++    return report
++
++
++def markdown(report):
++    order = ['ttft_seconds', 'seconds_per_token', 'physical_bytes', 'logical_bytes', 'physical_over_logical',
++             'unique_expert_bytes_per_token', 'repeat_expert_bytes_per_token', 'reread_amplification',
++             'gpu_hit_rate', 'host_hit_rate', 'spill_hit_rate', 'drive_hit_rate', 'effective_MBps',
++             'mean_queue_depth', 'drive_utilization', 'overlap_fraction']
++    def cell(stat, name):
++        if stat is None:
++            return 'n/a'
++        scale = 1e9 if name.endswith('bytes') or 'bytes_per_token' in name else 1
++        unit = ' GB' if scale != 1 else ''
++        return f'{stat["median"] / scale:.3g} / {stat["p95"] / scale:.3g}{unit}'
++    lines = []
++    for state in ('cold', 'warm'):
++        configs = [c for c in report if not c.startswith('_') and state in report[c]]
++        if not configs:
++            continue
++        lines += [f'### {state} OS cache (median / p95)', '', '| metric | ' + ' | '.join(configs) + ' |',
++                  '|---|' + '---|' * len(configs)]
++        for name in order:
++            lines.append(f'| {name} | ' + ' | '.join(cell(report[c][state].get(name), name) for c in configs) + ' |')
++        lines.append('| runs / flags | ' + ' | '.join(
++            f'{report[c][state]["runs"]} {",".join(report[c][state]["flags"]) or "-"}' for c in configs) + ' |')
++        lines.append('')
++    lines.append(f'Token ids: {json.dumps(report["_token_ids"])}')
++    return '\n'.join(lines)
++
++
++def self_test():
++    assert percentile([1, 2, 3], 0.95) == 2.9 and percentile([5], 0.95) == 5
++    def fake(seconds, ids, unique):
++        io = dict(requests=10, gpu_hits=5, host_hits=2, spill_hits=0, disk_reads=3)
++        evidence = dict(summary=dict(first_token_seconds=seconds, mean_decode_seconds=seconds / 10,
++                                     disk_bytes=1000,
++                                     decode_io=dict(unique_bytes_per_token=unique, repeat_bytes_per_token=50,
++                                                    effective_MBps=400.0, mean_queue_depth=2.0,
++                                                    drive_utilization=0.9, overlap_fraction=0.2)),
++                        token_timings=[dict(phase='prefill'), dict(phase='decode', io=io)])
++        return dict(metrics=metrics(evidence, dict(bytes_read=900), seconds), token_ids=ids, flags=[])
++    runs = [dict(fake(s, [1, 2], 100), config='patch', state='cold') for s in (10.0, 12.0, 11.0)]
++    runs += [dict(fake(20.0, [1, 2], 100), config='baseline', state='cold')]
++    report = aggregate(runs)
++    cold = report['patch']['cold']
++    assert cold['ttft_seconds']['median'] == 11.0 and abs(cold['ttft_seconds']['p95'] - 11.9) < 1e-9
++    assert cold['physical_over_logical']['median'] == 0.9 and cold['reread_amplification']['median'] == 1.5
++    assert cold['drive_hit_rate']['median'] == 0.3 and report['_token_ids']['identical_across_configs']
++    runs.append(dict(fake(9.0, [1, 3], 100), config='baseline', state='warm'))
++    assert not aggregate(runs)['_token_ids']['identical_across_configs']
++    old = dict(summary=dict(first_token_seconds=1.0, mean_decode_seconds=2.0, disk_bytes=10),
++               token_timings=[dict(phase='decode')])
++    assert metrics(old, None, 3.0)['gpu_hit_rate'] is None      # v0.6 evidence has no ledger
++    assert 'cold OS cache' in markdown(report)
++    print('bench_e2e self-test: PASS')
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    parser.add_argument('--model', type=Path, default=Path(os.environ.get('FRUSTUM_MODEL') or HERE.parent))
++    parser.add_argument('--configs', nargs='+', choices=sorted(CONFIGS), default=['baseline', 'patch'])
++    parser.add_argument('--runs', type=int, default=3, help='Repetitions per configuration and cache state (>= 3)')
++    parser.add_argument('--tokens', type=int, default=16)
++    parser.add_argument('--prompt', default='Do you like Dino Buddies? Reply in one short sentence.')
++    parser.add_argument('--baseline-dir', type=Path, help='An untouched v0.6 checkout, for the v06 configuration')
++    parser.add_argument('--spill-dir', type=Path, help='Folder on a fast local drive, for the spill configuration')
++    parser.add_argument('--spill-gib', type=float, default=64.0)
++    parser.add_argument('--no-purge', action='store_true', help='Skip the cold runs (warm only)')
++    parser.add_argument('--extra', nargs=argparse.REMAINDER, default=[],
++                        help='Arguments passed to every frustum_chat.py run, e.g. --extra --host-cache-gib 8')
++    parser.add_argument('--output', type=Path)
++    parser.add_argument('--self-test', action='store_true')
++    args = parser.parse_args()
++    if args.self_test:
++        return self_test()
++    if args.runs < 3:
++        parser.error('--runs must be at least 3')
++    if args.baseline_dir:
++        args.configs = list(dict.fromkeys(args.configs + ['v06']))
++    if 'v06' in args.configs and not args.baseline_dir:
++        parser.error('v06 needs --baseline-dir')
++    if 'spill' in args.configs and not args.spill_dir:
++        parser.error('spill needs --spill-dir')
++    out = args.output or HERE / 'bench_runs' / time.strftime('%Y%m%d_%H%M%S')
++    out.mkdir(parents=True, exist_ok=False)
++    shards = sorted(args.model.glob('*.safetensors'))
++    counters = os_cache.DeviceCounters(args.model)
++    log = (out / 'bench.log').open('w', encoding='utf-8')
++
++    def say(text):
++        print(text, flush=True)
++        log.write(text + '\n'); log.flush()
++
++    say(f'model {args.model} ({len(shards)} shards); device counters: '
++        f'{"ok" if counters.read() else "UNAVAILABLE (" + str(counters.error) + ")"}')
++    runs = []
++    for repetition in range(args.runs):
++        for config in args.configs:
++            extra, env_extra = CONFIGS[config]
++            folder = args.baseline_dir if config == 'v06' else HERE
++            if config == 'spill':
++                extra = extra + ['--spill-dir', str(args.spill_dir), '--spill-gib', str(args.spill_gib)]
++            for state in (('warm',) if args.no_purge else ('cold', 'warm')):
++                flags = []
++                if state == 'cold':
++                    purged, failed = os_cache.purge_file_cache(shards)
++                    if failed:
++                        flags.append(f'purge_failed_{failed}')
++                evidence_path = out / f'{config}_{state}_{repetition}.json'
++                command = [sys.executable, str(folder / 'frustum_chat.py'), '--model', str(args.model),
++                           '--prompt', args.prompt, '--max-new-tokens', str(args.tokens),
++                           '--evidence', str(evidence_path), *extra, *args.extra]
++                if config != 'v06':
++                    command.append('--trace-routing')
++                say(f'[{repetition + 1}/{args.runs}] {config} {state}: {" ".join(command[1:])} '
++                    + ' '.join(f'{k}={v}' for k, v in env_extra.items()))
++                before, began = counters.read(), time.perf_counter()
++                done = subprocess.run(command, cwd=folder, env=dict(os.environ, PYTHONUTF8='1', **env_extra),
++                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8')
++                seconds = time.perf_counter() - began
++                physical = os_cache.delta(before, counters.read())
++                log.write(done.stdout + '\n'); log.flush()
++                if done.returncode:
++                    say(f'  FAILED with exit code {done.returncode}; see bench.log')
++                    raise SystemExit(1)
++                evidence = json.loads(evidence_path.read_text(encoding='utf-8'))
++                numbers = metrics(evidence, physical, seconds)
++                ratio = numbers['physical_over_logical']
++                if physical is None:
++                    flags.append('physical_bytes_unavailable')
++                elif state == 'cold' and ratio is not None and ratio < 0.8:
++                    flags.append('cold_not_achieved')
++                if config == 'spill' and state == 'cold' and repetition == 0:
++                    flags.append('first_run_fills_spill')
++                say(f'  first token {numbers["ttft_seconds"]:.1f}s, '
++                    f'{numbers["seconds_per_token"] or float("nan"):.2f} s/token, physical/logical '
++                    f'{"n/a" if ratio is None else format(ratio, ".2f")} {" ".join(flags)}')
++                runs.append(dict(config=config, state=state, repetition=repetition, metrics=numbers,
++                                 token_ids=evidence['token_ids'], flags=flags, evidence=evidence_path.name))
++    report = aggregate(runs)
++    (out / 'results.json').write_text(json.dumps(dict(
++        prompt=args.prompt, tokens=args.tokens, runs_per_cell=args.runs, configs=args.configs,
++        note='physical_bytes is device-wide for the model drive; other programs reading it are included',
++        report=report, runs=runs), indent=2), encoding='utf-8')
++    text = markdown(report)
++    (out / 'results.md').write_text(text + '\n', encoding='utf-8')
++    say('\n' + text + f'\n\nWrote {out}')
++    log.close()
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/cache_policy.py b/cache_policy.py
+index 65880e1..5d9aa37 100755
+--- a/cache_policy.py
++++ b/cache_policy.py
+@@ -124,17 +124,18 @@ class Tier:
+             evicted.append(key)
+         return evicted
+ 
+-    def admit(self, key, size, frequency):
++    def admit(self, key, size, frequency, protected=()):
+         """Decide whether an optional copy of `key` is worth keeping here.
+ 
+         Returns the list of keys to evict (possibly empty) when admitted, or
+-        None when the newcomer ranks below what it would displace.
++        None when the newcomer ranks below what it would displace. Keys in
++        `protected` are never displaced (v0.7: the rest of the layer in progress).
+         """
+         if size > self.budget or key in self.order:
+             return None
+         evicted, freed = [], 0
+         rank = frequency.rank(key)
+-        skip = set()
++        skip = set(protected)
+         while self.used - freed + size > self.budget:
+             victim = self.victim(frequency, skip)
+             if victim is None:
+@@ -150,7 +151,7 @@ class Tier:
+ 
+ 
+ def simulate(steps, sizes, gpu_bytes, host_bytes=0, policy='lfu', half_life=8, pinned=None,
+-             host_policy='lru'):
++             host_policy='lru', group=None):
+     """Replay recorded requests through a GPU tier and an optional host tier.
+ 
+     steps: list of decode steps, each an ordered list of keys.
+@@ -159,16 +160,30 @@ def simulate(steps, sizes, gpu_bytes, host_bytes=0, policy='lfu', half_life=8, p
+     Returns one record per step with gpu hits, host hits and bytes read from
+     disk. The host tier keeps a copy of whatever it admits, GPU-resident or
+     not, matching TieredExpertCache.
++    group: optional key -> layer id. When given, the replay protects every key
++    of the layer in progress from eviction, as TieredExpertCache.begin_layer
++    does (v0.7); without it only the key being loaded is protected (v0.6).
++    Each record also splits disk bytes into first-time and repeated reads.
+     """
++    seen = set()
+     frequency = Frequency(half_life)
+     gpu = Tier(gpu_bytes, policy, pinned)
+     host = Tier(host_bytes, host_policy)
+     results = []
+     for step in steps:
+         frequency.tick()
+-        record = dict(requests=len(step), gpu_hits=0, host_hits=0, disk_reads=0, disk_bytes=0)
++        record = dict(requests=len(step), gpu_hits=0, host_hits=0, disk_reads=0, disk_bytes=0,
++                      unique_disk_bytes=0, repeat_disk_bytes=0)
++        layers = {}
++        if group is not None:
++            for key in step:
++                layers.setdefault(group(key), set()).add(key)
+         for key in step:
+             size = sizes[key]
++            keep = layers[group(key)] if group is not None else (key,)
++            if group is not None:
++                for member in keep:
++                    frequency.touch(member)
+             if size > gpu.budget:
+                 raise ValueError('An expert exceeds the GPU tier budget')
+             frequency.touch(key)
+@@ -182,9 +197,15 @@ def simulate(steps, sizes, gpu_bytes, host_bytes=0, policy='lfu', half_life=8, p
+             else:
+                 record['disk_reads'] += 1
+                 record['disk_bytes'] += size
+-                if host.budget and not gpu.pinned(key) and host.admit(key, size, frequency) is not None:
++                record['repeat_disk_bytes' if key in seen else 'unique_disk_bytes'] += size
++                seen.add(key)
++                if host.budget and not gpu.pinned(key) and host.admit(
++                        key, size, frequency, keep if group is not None else ()) is not None:
+                     host.add(key, size)
+-            gpu.make_room(size, frequency, (key,))
++            try:
++                gpu.make_room(size, frequency, keep)
++            except RuntimeError:
++                gpu.make_room(size, frequency, (key,))  # tier smaller than one layer: v0.6 behaviour
+             gpu.add(key, size)
+         results.append(record)
+     return results
+diff --git a/decode_cache_replay.py b/decode_cache_replay.py
+index 6f144ea..2601bf3 100755
+--- a/decode_cache_replay.py
++++ b/decode_cache_replay.py
+@@ -1,6 +1,7 @@
+ """Replay recorded routing through the cache policies to estimate disk reads per token.
+ 
+-Input is an evidence file written by `frustum_chat.py --profile-decode`. Every
++Input is an evidence file written by `frustum_chat.py --profile-decode` or, since
++v0.7, `--trace-routing` (no synchronisation, so use that for long runs). Every
+ profiled step (decode or reuse_feed) contributes one pass. The more passes the
+ profile holds, the more the comparison means: two passes say little about
+ which policy wins.
+@@ -16,10 +17,20 @@ from cache_policy import simulate
+ from frustum_loader import Catalog, default_model_root
+ 
+ 
++def layers_of(step):
++    """(layer index, routed expert ids) for a profiled or traced step."""
++    if 'layers' in step:
++        return [(layer['layer'], {e for row in layer['selected_experts'] for e in row}) for layer in step['layers']]
++    return [(index, {e for row in rows for e in row}) for index, rows in enumerate(step['routing'])]
++
++
++def group(key):
++    return key.split('.ffn.')[0]
++
++
+ def requests(catalog, step):
+-    for layer in step['layers']:
+-        prefix = f"layers.{layer['layer']}.ffn."
+-        selected, = layer['selected_experts']
++    for index, selected in layers_of(step):
++        prefix = f"layers.{index}.ffn."
+         for expert in [*(f'experts.{index}' for index in sorted(set(selected))), 'shared_experts']:
+             key = prefix + expert
+             size = sum(catalog.tensors[f'{key}.{projection}.{kind}'].size
+@@ -33,11 +44,14 @@ def main():
+     parser.add_argument('--model', type=Path, default=Path(default_model_root()))
+     parser.add_argument('--gpu-mib', type=int, nargs='+', default=[256, 2048, 3400, 6144])
+     parser.add_argument('--host-gib', type=float, nargs='+', default=[0, 8])
++    parser.add_argument('--host-policy', nargs='+', choices=('lru', 'lfu'), default=['lru'])
++    parser.add_argument('--summary', action='store_true', help='Omit the per-pass records')
+     parser.add_argument('--pin-shared', action='store_true', help='Treat shared experts as never evicted')
+     args = parser.parse_args()
+     evidence = json.loads(args.profile.read_text(encoding='utf-8'))
+     catalog = Catalog(args.model)
+-    passes = [list(requests(catalog, step)) for step in evidence['token_timings'] if 'layers' in step]
++    passes = [list(requests(catalog, step)) for step in evidence['token_timings']
++              if ('layers' in step or 'routing' in step) and step.get('phase') != 'prefill']
+     if len(passes) < 2:
+         parser.error('At least two profiled passes are required')
+     sizes = {key: size for step in passes for key, size in step}
+@@ -47,19 +61,28 @@ def main():
+     table = []
+     for gpu_mib in args.gpu_mib:
+         for host_gib in args.host_gib:
+-            for policy in ('lru', 'lfu'):
++            for policy, host_policy, protect in [(g, h, pr) for g in ('lru', 'lfu') for h in args.host_policy
++                                                 for pr in (False, True)]:
++                label = dict(gpu_mib=gpu_mib, host_gib=host_gib, gpu_policy=policy, host_policy=host_policy,
++                             layer_protection=protect)
+                 try:
+-                    result = simulate(steps, sizes, gpu_mib * 2**20, int(host_gib * 2**30), policy, pinned=pinned)
++                    result = simulate(steps, sizes, gpu_mib * 2**20, int(host_gib * 2**30), policy, pinned=pinned,
++                                      host_policy=host_policy, group=group if protect else None)
+                 except (RuntimeError, ValueError) as error:
+-                    table.append(dict(gpu_mib=gpu_mib, host_gib=host_gib, gpu_policy=policy, error=str(error)))
++                    table.append(dict(label, error=str(error)))
+                     continue
+                 later = result[1:]
+                 table.append(dict(
+-                    gpu_mib=gpu_mib, host_gib=host_gib, gpu_policy=policy,
++                    label,
+                     disk_GB_per_pass_after_first=round(sum(r['disk_bytes'] for r in later) / len(later) / 1e9, 3),
++                    repeat_disk_GB_per_pass_after_first=round(
++                        sum(r['repeat_disk_bytes'] for r in later) / len(later) / 1e9, 3),
+                     gpu_hit_rate=round(sum(r['gpu_hits'] for r in later) / sum(r['requests'] for r in later), 3),
+                     host_hit_rate=round(sum(r['host_hits'] for r in later) / sum(r['requests'] for r in later), 3),
+                     per_pass=result))
++    if args.summary:
++        for row in table:
++            row.pop('per_pass', None)
+     print(json.dumps({
+         'scope': 'Demand-order replay from a cold start; host tier is LRU. An estimate, not a latency measurement.',
+         'passes': len(passes),
+diff --git a/expert_cache.py b/expert_cache.py
+index b957a48..9029abb 100755
+--- a/expert_cache.py
++++ b/expert_cache.py
+@@ -19,13 +19,42 @@ Design
+   same logic on recorded routing.
+ 
+ Weights stay packed (FP4/FP8 bytes) in both tiers; decoding happens per use.
++
++v0.7 (none of it changes which expert runs or any arithmetic):
++- begin_layer(keys) protects every expert of the layer in progress in both
++  tiers. Before, loading one expert of a layer could evict another expert of
++  the same layer that had not been used yet, turning a hit into a re-read.
++  FRUSTUM_PROTECT_LAYER=0 restores the old behaviour.
++- One positioned read per expert instead of one per tensor when the tensors
++  are adjacent on disk (RangeReader.read_group). FRUSTUM_COALESCE=0 restores
++  per-tensor reads.
++- Speculative reads (next-layer guesses) are tracked separately from demand
++  reads: a guess that is not needed is cancelled if it has not started and
++  counted as waste if it has; get() adopts a guess that turned out right.
++- io_ledger.IOLedger records what the roofline needs: unique and repeated
++  bytes, drive-busy time, queue depth, blocked time and overlap.
++- Optional RAM guard: shrink the host tier when free RAM falls below a floor.
++- Optional spill tier (spill_tier.SpillTier, set cache.spill): verified exact copies of
++  experts on a faster local drive, consulted before the checkpoint drive.
+ """
+ from concurrent.futures import ThreadPoolExecutor
+ from dataclasses import dataclass
++import os
+ import time
+ 
+ from cache_policy import Frequency, Tier
+ from frustum_loader import RangeReader
++from io_ledger import IOLedger
++
++
++def _flag(name, default=True):
++    value = os.environ.get(name)
++    return default if value is None else value.strip().lower() not in ('0', 'false', 'off', 'no')
++
++
++class _Buffers(list):
++    """A read result that remembers which storage it came from ('disk' or 'spill')."""
++    source = 'disk'
+ 
+ 
+ @dataclass
+@@ -37,7 +66,8 @@ class Entry:
+ class TieredExpertCache:
+     def __init__(self, torch, catalog, device, gpu_bytes, host_bytes=0, *, io_threads=4,
+                  gpu_policy='lfu', host_policy='lru', pinned=None, half_life=8,
+-                 cap_bytes=None, headroom_bytes=0):
++                 cap_bytes=None, headroom_bytes=0, coalesce=None, protect_layer=None,
++                 ram_probe=None, ram_floor_bytes=0):
+         if gpu_bytes <= 0 or host_bytes < 0 or io_threads < 0:
+             raise ValueError('Invalid cache configuration')
+         self.t = torch
+@@ -52,9 +82,18 @@ class TieredExpertCache:
+         self.host = Tier(host_bytes, host_policy)
+         self.cache = {}    # key -> Entry on the compute device
+         self.ram = {}      # key -> list of CPU uint8 tensors
+-        self.pending = {}  # key -> Future[list[bytearray]]
++        self.pending = {}  # key -> Future[list of buffers]
++        self.speculative = set()  # keys in pending that were issued as guesses
+         self.pool = ThreadPoolExecutor(io_threads, thread_name_prefix='frustum-io') if io_threads else None
+         self.cap, self.headroom = cap_bytes, headroom_bytes
++        self.coalesce = _flag('FRUSTUM_COALESCE') if coalesce is None else coalesce
++        self.protect_layer = _flag('FRUSTUM_PROTECT_LAYER') if protect_layer is None else protect_layer
++        self.layer_keys = frozenset()
++        self.ledger = IOLedger()
++        self.ram_probe, self.ram_floor = ram_probe, ram_floor_bytes
++        self.host_shrinks = 0
++        self.spill = None  # optional SpillTier
++        self.spill_hits = 0
+         self.requests = self.hits = self.host_hits = self.disk_reads = self.evictions = 0
+         self.upload_seconds = self.wait_seconds = 0.0
+         self.upload_bytes = 0
+@@ -71,27 +110,107 @@ class TieredExpertCache:
+     def size(self, key):
+         return sum(self.catalog.tensors[name].size for name in self.plan[key])
+ 
+-    def _read(self, key):
+-        return [self.reader.read(self.catalog.tensors[name]) for name in self.plan[key]]
++    def resident(self, key):
++        """True when key can be served without the drive (either tier, or a read under way)."""
++        return key in self.cache or key in self.ram or key in self.pending
++
++    def _read(self, key, queued=False):
++        items = [self.catalog.tensors[name] for name in self.plan[key]]
++        size = 0
++        self.ledger.read_begin(queued)
++        try:
++            identity = None
++            if self.spill is not None:
++                identity = self.spill.identity(items)
++                copy = self.spill.load(key, identity)
++                if copy is not None:
++                    result = _Buffers(copy)
++                    result.source = 'spill'
++                    return result
++            if self.coalesce:
++                buffers = self.reader.read_group(items)
++            else:
++                buffers = [self.reader.read(item) for item in items]
++            # Bytes actually requested: each underlying buffer once (a coalesced read may span gaps).
++            owners = {id(getattr(b, 'obj', b)): getattr(b, 'obj', b) for b in buffers}
++            size = sum(len(owner) for owner in owners.values())
++            if self.spill is not None:
++                self.spill.store(key, buffers, identity)
++            return _Buffers(buffers)
++        finally:
++            self.ledger.read_end(size)
++
++    def _submit(self, key):
++        self.ledger.submitted()
++        return self.pool.submit(self._read, key, True)
+ 
+     def new_pass(self):
+         """Call once per pass over the layers (one prefill or one decode step)."""
+         self.frequency.tick()
++        self._guard_ram()
++
++    def begin_layer(self, keys):
++        """Declare the experts the layer in progress will use; they are not evicted until the
++        next begin_layer. Their use is counted now, so the frequency ranking already knows
++        they belong to this pass when the first of them needs room."""
++        self.layer_keys = frozenset(keys) if self.protect_layer else frozenset()
++        for key in self.layer_keys:
++            self.frequency.touch(key)
+ 
+-    def prefetch(self, keys):
+-        """Start background reads for keys that are in neither tier. Never blocks."""
++    def _guard_ram(self):
++        """Give RAM back when the machine is short: the host tier only ever shrinks here."""
++        if self.ram_probe is None or not self.host.budget:
++            return
++        available = self.ram_probe()
++        if available is None or available >= self.ram_floor:
++            return
++        target = max(0, self.host.used - (self.ram_floor - available))
++        self.host.budget = min(self.host.budget, target)
++        while self.host.used > self.host.budget:
++            victim = self.host.victim(self.frequency, self.layer_keys)
++            if victim is None:
++                break
++            self.host.remove(victim)
++            del self.ram[victim]
++        self.host_shrinks += 1
++
++    def prefetch(self, keys, speculative=False):
++        """Start background reads for keys that are in neither tier. Never blocks.
++
++        speculative=True marks guesses: they are accounted separately, and a later
++        demand prefetch or get() for the same key adopts the read already under way."""
+         if self.pool is None:
+             return
+         for key in keys:
+-            if key not in self.cache and key not in self.ram and key not in self.pending:
+-                self.pending[key] = self.pool.submit(self._read, key)
++            if key in self.pending:
++                if not speculative and key in self.speculative:
++                    self._adopt(key)
++                continue
++            if key not in self.cache and key not in self.ram:
++                self.pending[key] = self._submit(key)
++                if speculative:
++                    self.speculative.add(key)
++                    self.ledger.speculative('issued')
++
++    def _adopt(self, key):
++        self.speculative.discard(key)
++        self.ledger.speculative('used', self.size(key))
+ 
+     def discard_pending(self, keep=()):
+         """Forget background reads nobody collected, e.g. after an interrupted forward pass.
+         Reads for keys in keep stay queued (next-layer prediction issued them early)."""
+         keep = set(keep)
+         for key in [key for key in self.pending if key not in keep]:
+-            self.pending.pop(key).cancel()
++            future = self.pending.pop(key)
++            guess = key in self.speculative
++            self.speculative.discard(key)
++            if future.cancel():
++                self.ledger.unsubmitted()
++                if guess:
++                    self.ledger.speculative('cancelled')
++            elif guess:
++                # Already reading (or read): the drive time is spent. Record it; the bytes are dropped.
++                self.ledger.speculative('wasted', self.size(key))
+ 
+     def _memory_ok(self, additional):
+         if not self.cuda or self.cap is None:
+@@ -110,7 +229,7 @@ class TieredExpertCache:
+         """Keep a host copy when the host tier wants one."""
+         if not self.host.budget or self.pinned(key):
+             return
+-        evicted = self.host.admit(key, size, self.frequency)
++        evicted = self.host.admit(key, size, self.frequency, self.layer_keys)
+         if evicted is None:
+             return
+         for victim in evicted:
+@@ -126,6 +245,7 @@ class TieredExpertCache:
+         if entry is not None:
+             self.hits += 1
+             self.gpu.touch(key)
++            self.ledger.served(key, entry.size, 'gpu')
+             return entry
+         size = self.size(key)
+         if size > self.gpu.budget:
+@@ -134,21 +254,43 @@ class TieredExpertCache:
+         if tensors is not None:
+             self.host_hits += 1
+             self.host.touch(key)
++            self.ledger.served(key, size, 'host')
+         else:
+             began = time.perf_counter()
+             future = self.pending.pop(key, None)
+-            buffers = self._read(key) if future is None else future.result()
++            if key in self.speculative:
++                self._adopt(key)
++            self.ledger.wait_begin()
++            try:
++                buffers = self._read(key) if future is None else future.result()
++            finally:
++                self.ledger.wait_end()
+             self.wait_seconds += time.perf_counter() - began
+-            self.disk_reads += 1
++            if getattr(buffers, 'source', 'disk') == 'spill':
++                self.spill_hits += 1
++                self.ledger.served(key, size, 'spill')
++            else:
++                self.disk_reads += 1
++                self.ledger.served(key, size, 'disk')
+             tensors = [self.t.frombuffer(buffer, dtype=self.t.uint8) for buffer in buffers]
+             self._remember(key, tensors, size)
+         keep = set(protected)
+         keep.add(key)
+-        for victim in self.gpu.make_room(size, self.frequency, keep):
++        wide = keep | self.layer_keys
++        try:
++            victims = self.gpu.make_room(size, self.frequency, wide)
++        except RuntimeError:
++            # The tier cannot hold a whole layer at once: protect only what the caller named.
++            wide = keep
++            victims = self.gpu.make_room(size, self.frequency, keep)
++        for victim in victims:
+             self._evict(victim)
+         # The byte budget is a plan; the allocator is the truth. Shed more if it is tight.
+         while not self._memory_ok(size):
+-            victim = self.gpu.victim(self.frequency, keep)
++            victim = self.gpu.victim(self.frequency, wide)
++            if victim is None and wide is not keep:
++                wide = keep
++                victim = self.gpu.victim(self.frequency, keep)
+             if victim is None:
+                 raise RuntimeError('Insufficient free dedicated VRAM; stop before allocating')
+             self.gpu.remove(victim)
+@@ -169,7 +311,10 @@ class TieredExpertCache:
+                     blocked_on_disk_seconds=self.wait_seconds,
+                     upload_seconds=self.upload_seconds, upload_bytes=self.upload_bytes,
+                     gpu_bytes=self.gpu.used, gpu_budget_bytes=self.gpu.budget, gpu_policy=self.gpu.policy,
+-                    host_bytes=self.host.used, host_budget_bytes=self.host.budget, host_policy=self.host.policy)
++                    host_bytes=self.host.used, host_budget_bytes=self.host.budget, host_policy=self.host.policy,
++                    host_shrinks=self.host_shrinks, coalesced_reads=self.coalesce,
++                    layer_protection=self.protect_layer, io=self.ledger.snapshot(),
++                    spill_hits=self.spill_hits, spill=self.spill.stats() if self.spill is not None else None)
+ 
+     def close(self):
+         if self.pool is not None:
+@@ -177,6 +322,9 @@ class TieredExpertCache:
+         if self.cuda:
+             self.t.cuda.synchronize(self.device)
+         self.pending.clear()
++        self.speculative.clear()
+         self.cache.clear()
+         self.ram.clear()
++        if self.spill is not None:
++            self.spill.close()
+         self.reader.close()
+diff --git a/frustum_chat.py b/frustum_chat.py
+index 10e7a49..cf2617d 100755
+--- a/frustum_chat.py
++++ b/frustum_chat.py
+@@ -26,7 +26,9 @@ from frustum_loader import Catalog, RangeReader, default_model_root
+ from generation import chat_prompt, drive, reusable_prefix  # chat_prompt re-exported for callers
+ from layers0_3_block import GIB, SequentialBlocks
+ import fused_kernels
++import os_cache
+ import placement
++from spill_tier import SpillTier
+ 
+ 
+ class OutputHead:
+@@ -103,7 +105,8 @@ class Session:
+ 
+ 
+ @torch.inference_mode()
+-def generate(session, ids, max_new_tokens, pick, on_token=None, profile_decode=False, verbose=False):
++def generate(session, ids, max_new_tokens, pick, on_token=None, profile_decode=False, verbose=False,
++             trace_routing=False):
+     """Generate up to max_new_tokens after the prompt token ids.
+ 
+     Returns (token_ids, timings, reused_prompt_tokens, stopped_at_eos).
+@@ -160,6 +163,10 @@ def generate(session, ids, max_new_tokens, pick, on_token=None, profile_decode=F
+                       head_logical_bytes=head.reader.bytes_read - head_bytes_before)
+         if layer_profile:
+             timing['layers'] = layer_profile
++        # v0.7: expert I/O for this step (no synchronisation, so it does not perturb timing).
++        timing['io'] = engine.moe.cache.ledger.step()
++        if trace_routing:
++            timing['routing'] = [record['selected_experts'] for record in records]
+         return logits, timing
+ 
+     reused = reusable_prefix(session.fed, ids) if session.reuse else 0
+@@ -238,6 +245,18 @@ def main():
+     parser.add_argument('--predict-next', type=int,
+                         help='Experts of the next layer to start reading early during decode (0 disables). '
+                              'Default: FRUSTUM_PREDICT_NEXT, else 0 (off)')
++    parser.add_argument('--predict-mode', choices=('shadow', 'gated', 'always'),
++                        help='What --predict-next does with its guesses: shadow scores them without reading, '
++                             'gated (default) reads only while they are measurably right, always is v0.6')
++    parser.add_argument('--trace-routing', action='store_true',
++                        help='Record the routed experts of every step in --evidence (for decode_cache_replay.py '
++                             'and roofline.py). Unlike --profile-decode it adds no synchronisation')
++    parser.add_argument('--spill-dir', type=Path,
++                        help='Folder on a faster local drive for verified exact copies of experts already read '
++                             '(spill_tier.py). Off unless given')
++    parser.add_argument('--spill-gib', type=float, default=64.0, help='Byte budget for --spill-dir')
++    parser.add_argument('--ram-floor-gib', type=float, default=3.0,
++                        help='Shrink the host RAM tier when free system RAM falls below this; 0 disables')
+     parser.add_argument('--legacy', action='store_true',
+                         help='v0.4 behaviour for A/B runs: mmap reader, 256 MiB caches, streamed head, no reuse')
+     args = parser.parse_args()
+@@ -282,9 +301,17 @@ def main():
+                        io_threads=0 if args.legacy else args.io_threads, gpu_policy=plan['gpu_policy'],
+                        host_policy=plan['host_policy'], pin_shared=plan['pin_shared'],
+                        cap_bytes=plan['gpu_cap_bytes'],
+-                       predict_next=0 if args.legacy else args.predict_next)
++                       predict_next=0 if args.legacy else args.predict_next,
++                       predict_mode=args.predict_mode)
+     engine = SequentialBlocks(catalog, args.context, plan['dense_cache_mib'], plan['expert_cache_mib'],
+                               catalog.config['text_config']['num_hidden_layers'], moe_options)
++    if args.ram_floor_gib > 0 and not args.legacy:
++        engine.moe.cache.ram_probe = placement.available_ram
++        engine.moe.cache.ram_floor = int(args.ram_floor_gib * GIB)
++    if args.spill_dir and not args.legacy:
++        checkpoint_id = (str(catalog.root), catalog.index.get('metadata', {}).get('total_size'), len(catalog.tensors))
++        engine.moe.cache.spill = SpillTier(args.spill_dir, int(args.spill_gib * GIB), checkpoint_id)
++    device_counters = os_cache.DeviceCounters(args.model)
+     session = Session(engine, tokenizer, head, reuse=not (args.no_reuse or args.legacy))
+     sample = make_sampler(args.temperature, args.top_k, args.top_p, args.seed)
+     distributions = []
+@@ -328,7 +355,9 @@ def main():
+             torch.cuda.reset_peak_memory_stats()
+             cache = engine.moe.cache
+             before = dict(disk=session.disk_bytes(), requests=cache.requests, gpu=cache.hits,
+-                          host=cache.host_hits, read=cache.disk_reads)
++                          host=cache.host_hits, read=cache.disk_reads, spill=cache.spill_hits)
++            cache.ledger.step()  # start this turn's I/O window
++            physical_before = device_counters.read()
+             shown, opened = 0, False
+ 
+             def on_token(output, timing):
+@@ -346,7 +375,7 @@ def main():
+             started = time.perf_counter()
+             try:
+                 tokens, timings, reused, stopped = generate(session, ids, args.max_new_tokens, pick, on_token,
+-                                                            args.profile_decode, args.verbose)
++                                                            args.profile_decode, args.verbose, args.trace_routing)
+             except ValueError as error:
+                 if args.prompt is not None:
+                     raise
+@@ -365,13 +394,42 @@ def main():
+                 disk_bytes=session.disk_bytes() - before['disk'],
+                 expert_requests=cache.requests - before['requests'],
+                 expert_gpu_hits=cache.hits - before['gpu'], expert_host_hits=cache.host_hits - before['host'],
+-                expert_disk_reads=cache.disk_reads - before['read'])
++                expert_disk_reads=cache.disk_reads - before['read'],
++                expert_spill_hits=cache.spill_hits - before['spill'])
++            # v0.7 roofline inputs. Physical bytes are device-wide (other programs on the drive count).
++            physical = os_cache.delta(physical_before, device_counters.read())
++            decode_io = [t['io'] for t in timings if t['phase'] == 'decode' and 'io' in t]
++            total = lambda name: sum(step[name] for step in decode_io)
++            summary['physical_device'] = physical
++            summary['physical_device_error'] = device_counters.error
++            summary['physical_over_logical'] = (physical['bytes_read'] / summary['disk_bytes']
++                                                if physical and summary['disk_bytes'] else None)
++            if decode_io:
++                busy, wall = total('busy_seconds'), sum(decode)
++                summary['decode_io'] = dict(
++                    steps=len(decode_io), expert_bytes_per_token=total('bytes_read') / len(decode_io),
++                    unique_bytes_per_token=total('unique_bytes') / len(decode_io),
++                    repeat_bytes_per_token=total('repeat_bytes') / len(decode_io),
++                    drive_busy_seconds_per_token=busy / len(decode_io),
++                    blocked_seconds_per_token=total('blocked_seconds') / len(decode_io),
++                    drive_utilization=busy / wall if wall else None,
++                    effective_MBps=total('bytes_read') / 1e6 / busy if busy else None,
++                    mean_queue_depth=total('depth_seconds') / busy if busy else None,
++                    overlap_fraction=(busy - total('busy_blocked_seconds')) / busy if busy else None)
+             rate = f'{summary["mean_decode_seconds"]:.1f} s/token' if decode else 'no decode steps'
+             print(f'[{len(tokens)} tokens, first after {first:.1f}s, then {rate}; '
+                   f'{reused}/{len(ids)} prompt tokens reused; disk {summary["disk_bytes"] / 1e9:.2f} GB; experts '
+                   f'{100 * summary["expert_gpu_hits"] / requests:.0f}% GPU, '
+                   f'{100 * summary["expert_host_hits"] / requests:.0f}% RAM, '
+                   f'{100 * summary["expert_disk_reads"] / requests:.0f}% disk]', flush=True)
++            if summary.get('decode_io'):
++                d = summary['decode_io']
++                show = lambda value, form: 'n/a' if value is None else format(value, form)
++                print(f'[decode I/O per token: {d["expert_bytes_per_token"] / 1e9:.2f} GB experts '
++                      f'({d["repeat_bytes_per_token"] / 1e9:.2f} GB re-read), drive busy '
++                      f'{show(d["drive_utilization"] and 100 * d["drive_utilization"], ".0f")}% of the time at '
++                      f'{show(d["effective_MBps"], ".0f")} MB/s, queue {show(d["mean_queue_depth"], ".1f")}, '
++                      f'physical/logical {show(summary["physical_over_logical"], ".2f")}]', flush=True)
+             if args.evidence:
+                 with args.evidence.open('x', encoding='utf-8') as handle:
+                     json.dump(dict(prompt=prompt, prompt_text=prompt_text, prompt_token_ids=ids,
+diff --git a/frustum_loader.py b/frustum_loader.py
+index ab734df..cae9a30 100755
+--- a/frustum_loader.py
++++ b/frustum_loader.py
+@@ -5,7 +5,7 @@ from __future__ import annotations
+ import argparse
+ from collections import Counter, OrderedDict
+ from contextlib import contextmanager
+-from dataclasses import dataclass
++from dataclasses import dataclass, replace
+ import json
+ import io
+ import mmap
+@@ -180,6 +180,46 @@ class RangeReader:
+             self.readinto(item, data)
+         return data
+ 
++    def read_group(self, items, max_gap=65536):
++        """Read several tensors with as few positioned reads as possible (v0.7).
++
++        Ranges in the same file that touch, or are separated by at most max_gap
++        bytes, are fetched with one read into one buffer; each tensor is returned
++        as a writable memoryview into it, in the order given. The bytes are the
++        same bytes read() returns. Gap bytes that were read are counted in
++        bytes_read, so the counter stays an honest record of what was requested.
++        mode='mmap' keeps the one-read-per-tensor behaviour.
++        """
++        items = list(items)
++        if self.mode == 'mmap' or len(items) < 2:
++            return [self.read(item) for item in items]
++        order = sorted(range(len(items)), key=lambda i: (str(items[i].path), items[i].offset))
++        out = [None] * len(items)
++        run = []
++
++        def flush():
++            if not run:
++                return
++            first, last = items[run[0]], items[run[-1]]
++            span = replace(first, name=first.name + '..' + last.name,
++                           size=last.offset + last.size - first.offset)
++            data = self.read(span)
++            view = memoryview(data)
++            for i in run:
++                start = items[i].offset - first.offset
++                out[i] = view[start:start + items[i].size]
++            run.clear()
++
++        for i in order:
++            if run:
++                prev = items[run[-1]]
++                gap = items[i].offset - (prev.offset + prev.size)
++                if items[i].path != prev.path or not 0 <= gap <= max_gap:
++                    flush()
++            run.append(i)
++        flush()
++        return out
++
+     def copy(self, item, consume):
+         """Chunked callback API kept for existing callers: consume(offset, view).
+ 
+diff --git a/io_ledger.py b/io_ledger.py
+new file mode 100644
+index 0000000..0947d4d
+--- /dev/null
++++ b/io_ledger.py
+@@ -0,0 +1,163 @@
++"""I/O accounting for the routed-expert path. Pure Python, thread-safe, no torch.
++
++v0.7 instrumentation. It changes no arithmetic and no cache decision; it only
++answers the roofline question "is a token's time drive time or GPU time?".
++
++What it measures (all for expert reads issued through TieredExpertCache):
++  bytes_read            logical bytes requested from the checkpoint drive (what the code asked
++                        for; reads answered by the optional spill tier are not included)
++  unique_bytes          bytes of experts read for the first time in this process
++  repeat_bytes          bytes of experts that had been read before and were evicted
++                        from both tiers: the part a better cache could remove
++  reread_amplification  bytes_read / unique_bytes
++  busy_seconds          wall time with at least one read in flight (interval union)
++  effective_MBps        bytes_read / busy_seconds
++  queue_depth           time-weighted mean and max of reads in flight; queued_max is the
++                        most reads waiting for a reader thread
++  blocked_seconds       wall time the compute thread sat waiting for a read
++  overlap_fraction      share of busy_seconds during which the compute thread was NOT
++                        blocked, i.e. transfer genuinely overlapped compute
++  speculative_*         guessed reads: issued, used, cancelled before starting, wasted
++
++Physical device bytes are not visible from here; os_cache.DeviceCounters reads
++them from the OS and bench_e2e.py / frustum_chat.py report both side by side.
++"""
++import threading
++import time
++
++_COUNTERS = ('requests', 'gpu_hits', 'host_hits', 'spill_hits', 'disk_reads', 'bytes_read', 'unique_bytes',
++             'repeat_bytes', 'reads_started', 'busy_seconds', 'busy_blocked_seconds',
++             'depth_seconds', 'blocked_seconds', 'speculative_issued', 'speculative_used',
++             'speculative_cancelled', 'speculative_wasted', 'speculative_wasted_bytes',
++             'speculative_used_bytes')
++
++
++class IOLedger:
++    def __init__(self, clock=time.perf_counter):
++        self._clock = clock
++        self._lock = threading.Lock()
++        self._seen = set()
++        self._inflight = 0
++        self._queued = 0
++        self._blocked = 0
++        self._last = clock()
++        self._mark = None
++        self.created = self._last
++        self.max_depth = self.max_queued = 0
++        for name in _COUNTERS:
++            setattr(self, name, 0)
++
++    # -- time integration: call with the lock held, before any state change --
++    def _advance(self):
++        now = self._clock()
++        dt = now - self._last
++        self._last = now
++        if dt <= 0:
++            return
++        if self._inflight:
++            self.busy_seconds += dt
++            self.depth_seconds += dt * self._inflight
++            if self._blocked:
++                self.busy_blocked_seconds += dt
++        if self._blocked:
++            self.blocked_seconds += dt
++
++    # -- reader threads --
++    def submitted(self):
++        with self._lock:
++            self._queued += 1
++            self.max_queued = max(self.max_queued, self._queued)
++
++    def unsubmitted(self):
++        """A queued read was cancelled before a reader thread picked it up."""
++        with self._lock:
++            self._queued = max(0, self._queued - 1)
++
++    def read_begin(self, queued=True):
++        with self._lock:
++            self._advance()
++            if queued:
++                self._queued = max(0, self._queued - 1)
++            self._inflight += 1
++            self.reads_started += 1
++            self.max_depth = max(self.max_depth, self._inflight)
++
++    def read_end(self, size):
++        with self._lock:
++            self._advance()
++            self._inflight -= 1
++            self.bytes_read += size
++
++    # -- compute thread --
++    def wait_begin(self):
++        with self._lock:
++            self._advance()
++            self._blocked += 1
++
++    def wait_end(self):
++        with self._lock:
++            self._advance()
++            self._blocked -= 1
++
++    def served(self, key, size, source):
++        """One cache request was answered from 'gpu', 'host', 'spill' (fast local copy) or 'disk'."""
++        with self._lock:
++            self.requests += 1
++            if source == 'gpu':
++                self.gpu_hits += 1
++            elif source == 'host':
++                self.host_hits += 1
++            elif source == 'spill':
++                self.spill_hits += 1
++            else:
++                self.disk_reads += 1
++                if key in self._seen:
++                    self.repeat_bytes += size
++                else:
++                    self._seen.add(key)
++                    self.unique_bytes += size
++
++    def speculative(self, event, size=0):
++        """event: issued | used | cancelled | wasted."""
++        with self._lock:
++            setattr(self, 'speculative_' + event, getattr(self, 'speculative_' + event) + 1)
++            if event in ('used', 'wasted'):
++                name = f'speculative_{event}_bytes'
++                setattr(self, name, getattr(self, name) + size)
++
++    # -- reporting --
++    def totals(self):
++        with self._lock:
++            self._advance()
++            values = {name: getattr(self, name) for name in _COUNTERS}
++            values['wall_seconds'] = self._last - self.created
++            values['max_depth'], values['max_queued'] = self.max_depth, self.max_queued
++            return values
++
++    @staticmethod
++    def derive(v):
++        """Add the ratios to a totals() or step() dict. Ratios are None when undefined."""
++        ratio = lambda a, b: (a / b) if b else None
++        out = dict(v)
++        out['effective_MBps'] = ratio(v['bytes_read'] / 1e6, v['busy_seconds'])
++        out['drive_utilization'] = ratio(v['busy_seconds'], v.get('wall_seconds'))
++        out['mean_queue_depth'] = ratio(v['depth_seconds'], v['busy_seconds'])
++        out['overlap_fraction'] = ratio(v['busy_seconds'] - v['busy_blocked_seconds'], v['busy_seconds'])
++        out['reread_amplification'] = ratio(v['unique_bytes'] + v['repeat_bytes'], v['unique_bytes'])
++        for tier in ('gpu_hits', 'host_hits', 'spill_hits', 'disk_reads'):
++            out[tier.replace('_hits', '').replace('_reads', '') + '_rate'] = ratio(v[tier], v['requests'])
++        return out
++
++    def snapshot(self):
++        return self.derive(self.totals())
++
++    def step(self):
++        """Counters accumulated since the previous step() call (or creation), with ratios.
++
++        max_depth / max_queued are process-wide maxima, not per step."""
++        now = self.totals()
++        before = self._mark or dict.fromkeys(now, 0)
++        self._mark = now
++        delta = {k: now[k] - before[k] for k in now if k not in ('max_depth', 'max_queued')}
++        delta['max_depth'], delta['max_queued'] = now['max_depth'], now['max_queued']
++        return self.derive(delta)
+diff --git a/os_cache.py b/os_cache.py
+new file mode 100644
+index 0000000..9c64dc2
+--- /dev/null
++++ b/os_cache.py
+@@ -0,0 +1,130 @@
++"""OS-level helpers for honest storage benchmarks. No torch, no model code.
++
++DeviceCounters   cumulative bytes the *device* delivered, from the OS:
++                 Windows  IOCTL_DISK_PERFORMANCE on the volume (needs no admin rights;
++                          returns None if disk performance counters are disabled)
++                 Linux    /sys/dev/block/<major>:<minor>/stat
++                 These are device-wide: other programs reading the same drive are
++                 included. Close them during a benchmark.
++purge_file_cache best effort removal of the given files from the OS file cache so the
++                 next read is cold.
++                 Windows  opening a file with FILE_FLAG_NO_BUFFERING and closing it makes
++                          the cache manager drop that file's cached pages. This is observed
++                          behaviour, not a documented contract, so bench_e2e.py verifies
++                          every cold run by comparing physical with logical bytes instead
++                          of trusting the purge.
++                 Linux    posix_fadvise(DONTNEED).
++
++STATUS: the Linux paths ran in the development sandbox. The Windows paths are UNRUN.
++"""
++import ctypes
++import os
++from pathlib import Path
++
++
++def _windows_volume(path):
++    drive = os.path.splitdrive(str(Path(path).resolve()))[0]
++    if len(drive) != 2 or drive[1] != ':':
++        raise OSError('Only drive-letter volumes are supported: ' + str(path))
++    return '\\\\.\\' + drive
++
++
++class DeviceCounters:
++    """read() -> dict(bytes_read, read_count, read_time_seconds) or None when unavailable."""
++    def __init__(self, path):
++        self.path = Path(path)
++        self.error = None
++        self._stat = None
++        if os.name != 'nt':
++            try:
++                dev = os.stat(self.path).st_dev
++                base = Path(f'/sys/dev/block/{os.major(dev)}:{os.minor(dev)}')
++                # A partition's counters live in its own stat file; both forms work.
++                self._stat = base / 'stat' if (base / 'stat').exists() else None
++                if self._stat is None:
++                    self.error = 'no block-device statistics for this filesystem'
++            except OSError as error:
++                self.error = str(error)
++
++    def read(self):
++        try:
++            if os.name == 'nt':
++                return self._read_windows()
++            if self._stat is None:
++                return None
++            fields = self._stat.read_text().split()
++            return dict(bytes_read=int(fields[2]) * 512, read_count=int(fields[0]),
++                        read_time_seconds=int(fields[3]) / 1000)
++        except (OSError, ValueError, IndexError) as error:
++            self.error = str(error)
++            return None
++
++    def _read_windows(self):
++        from ctypes import wintypes
++
++        class DiskPerformance(ctypes.Structure):
++            _fields_ = [('BytesRead', ctypes.c_longlong), ('BytesWritten', ctypes.c_longlong),
++                        ('ReadTime', ctypes.c_longlong), ('WriteTime', ctypes.c_longlong),
++                        ('IdleTime', ctypes.c_longlong), ('ReadCount', wintypes.DWORD),
++                        ('WriteCount', wintypes.DWORD), ('QueueDepth', wintypes.DWORD),
++                        ('SplitCount', wintypes.DWORD), ('QueryTime', ctypes.c_longlong),
++                        ('StorageDeviceNumber', wintypes.DWORD),
++                        ('StorageManagerName', ctypes.c_wchar * 8)]
++
++        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
++        kernel.CreateFileW.restype = wintypes.HANDLE
++        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
++                                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
++        kernel.DeviceIoControl.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
++                                           ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
++                                           ctypes.c_void_p]
++        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
++        # Zero desired access is enough for this query and needs no elevation.
++        handle = kernel.CreateFileW(_windows_volume(self.path), 0, 0x1 | 0x2, None, 3, 0, None)
++        if handle == wintypes.HANDLE(-1).value:
++            raise OSError(ctypes.get_last_error(), 'Cannot open volume for performance query')
++        try:
++            data, returned = DiskPerformance(), wintypes.DWORD()
++            if not kernel.DeviceIoControl(handle, 0x00070020, None, 0, ctypes.byref(data),
++                                          ctypes.sizeof(data), ctypes.byref(returned), None):
++                raise OSError(ctypes.get_last_error(), 'IOCTL_DISK_PERFORMANCE failed (try: diskperf -y)')
++            return dict(bytes_read=int(data.BytesRead), read_count=int(data.ReadCount),
++                        read_time_seconds=data.ReadTime / 1e7)
++        finally:
++            kernel.CloseHandle(handle)
++
++
++def delta(before, after):
++    """Difference of two DeviceCounters.read() results, or None if either is missing."""
++    if before is None or after is None:
++        return None
++    return {key: after[key] - before[key] for key in after}
++
++
++def purge_file_cache(paths):
++    """Ask the OS to forget cached pages of these files. Returns (purged, failed)."""
++    purged = failed = 0
++    for path in paths:
++        try:
++            if os.name == 'nt':
++                from ctypes import wintypes
++                kernel = ctypes.WinDLL('kernel32', use_last_error=True)
++                kernel.CreateFileW.restype = wintypes.HANDLE
++                kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
++                                               wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
++                kernel.CloseHandle.argtypes = [wintypes.HANDLE]
++                # GENERIC_READ, share read/write/delete, OPEN_EXISTING, FILE_FLAG_NO_BUFFERING
++                handle = kernel.CreateFileW(str(path), 0x80000000, 0x7, None, 3, 0x20000000, None)
++                if handle == wintypes.HANDLE(-1).value:
++                    raise OSError(ctypes.get_last_error(), 'open failed')
++                kernel.CloseHandle(handle)
++            else:
++                fd = os.open(path, os.O_RDONLY)
++                try:
++                    os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
++                finally:
++                    os.close(fd)
++            purged += 1
++        except OSError:
++            failed += 1
++    return purged, failed
+diff --git a/roofline.py b/roofline.py
+new file mode 100644
+index 0000000..ae909c8
+--- /dev/null
++++ b/roofline.py
+@@ -0,0 +1,91 @@
++"""Bytes-per-token roofline for DeepSeek decode: is a token's time drive time or GPU time?
++
++    python roofline.py                         arithmetic only, from checkpoint constants
++    python roofline.py run.json [more.json]    add what a v0.7 run measured (--evidence files)
++
++A decode token cannot be faster than (bytes it must read) / (drive throughput), and it
++cannot be faster than its compute. Whichever floor is higher is the bottleneck, and work
++on the other one cannot help. With evidence, this prints both floors per token and says
++which one binds, then splits the bytes into first-time reads (no cache can remove them)
++and re-reads (a better cache can).
++
++Everything under "arithmetic" is calculation, not measurement.
++"""
++import argparse
++import json
++from pathlib import Path
++
++EXPERT_BYTES = 18_800_640          # three FP4 matrices + per-32 scales (whitepaper section 1)
++LAYERS, TOP_K = 40, 6
++
++
++def arithmetic(expert_bytes=EXPERT_BYTES, layers=LAYERS, top_k=TOP_K):
++    all_miss = expert_bytes * layers * top_k
++    rows = []
++    for miss in (1.0, 0.75, 0.5, 0.25, 0.1):
++        for mbps in (250, 500, 1000, 3000):
++            rows.append(dict(miss_fraction=miss, drive_MBps=mbps, GB_per_token=round(all_miss * miss / 1e9, 2),
++                             drive_seconds_per_token=round(all_miss * miss / 1e6 / mbps, 2)))
++    return dict(all_miss_bytes_per_token=all_miss, scenarios=rows)
++
++
++def measured(evidence):
++    steps = [t for t in evidence['token_timings'] if t['phase'] == 'decode' and 'io' in t]
++    if not steps:
++        return None
++    n = len(steps)
++    total = lambda name: sum(t['io'][name] for t in steps)
++    wall = sum(t['total_seconds'] for t in steps)
++    busy, blocked, read = total('busy_seconds'), total('blocked_seconds'), total('bytes_read')
++    mbps = read / 1e6 / busy if busy else None
++    utilization = busy / wall if wall else None
++    out = dict(
++        decode_tokens=n, seconds_per_token=wall / n,
++        expert_GB_per_token=read / n / 1e9,
++        first_time_GB_per_token=total('unique_bytes') / n / 1e9,
++        reread_GB_per_token=total('repeat_bytes') / n / 1e9,
++        gpu_rate=total('gpu_hits') / max(total('requests'), 1),
++        host_rate=total('host_hits') / max(total('requests'), 1),
++        spill_rate=total('spill_hits') / max(total('requests'), 1),
++        disk_rate=total('disk_reads') / max(total('requests'), 1),
++        effective_MBps=mbps, drive_utilization=utilization,
++        mean_queue_depth=total('depth_seconds') / busy if busy else None,
++        overlap_fraction=(busy - total('busy_blocked_seconds')) / busy if busy else None,
++        drive_floor_seconds_per_token=busy / n,
++        not_waiting_on_drive_seconds_per_token=(wall - blocked) / n,
++        speculative=dict(issued=total('speculative_issued'), used=total('speculative_used'),
++                         wasted=total('speculative_wasted'), wasted_GB=total('speculative_wasted_bytes') / 1e9),
++        physical_over_logical=evidence.get('summary', {}).get('physical_over_logical'))
++    if utilization is None:
++        out['verdict'] = 'No expert reads during decode: storage is not the limit for this run.'
++    elif utilization >= 0.85:
++        share = out['reread_GB_per_token'] / out['expert_GB_per_token'] if out['expert_GB_per_token'] else 0
++        out['verdict'] = (
++            f'Storage-bound: the drive was busy {100 * utilization:.0f}% of decode time. Kernels and overlap cannot '
++            f'help; only fewer bytes or a faster source can. {100 * share:.0f}% of the bytes were re-reads '
++            '(removable by a larger or better cache tier); the rest were first-time reads (removable only by a '
++            'faster copy, e.g. --spill-dir, or by reading them before they are needed).')
++    elif utilization <= 0.5:
++        out['verdict'] = (
++            f'Compute-bound: the drive was idle {100 * (1 - utilization):.0f}% of decode time. Reducing bytes will '
++            'not help much; GPU-side work (kernels, uploads) or using the idle drive time (accurate prediction) can.')
++    else:
++        out['verdict'] = (
++            f'Mixed: drive busy {100 * utilization:.0f}% of decode time. Both floors matter; up to '
++            f'{out["seconds_per_token"] * (1 - utilization):.2f} s/token of idle drive time exists for overlap.')
++    return out
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    parser.add_argument('evidence', nargs='*', type=Path)
++    args = parser.parse_args()
++    report = dict(arithmetic=arithmetic(), runs={})
++    for path in args.evidence:
++        result = measured(json.loads(path.read_text(encoding='utf-8')))
++        report['runs'][path.name] = result or 'no v0.7 decode I/O records in this file'
++    print(json.dumps(report, indent=2))
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/run_bench.ps1 b/run_bench.ps1
+new file mode 100644
+index 0000000..b3d4c26
+--- /dev/null
++++ b/run_bench.ps1
+@@ -0,0 +1,8 @@
++$ErrorActionPreference = 'Stop'
++. (Join-Path $PSScriptRoot '_python.ps1')
++Push-Location $PSScriptRoot
++try {
++    & $cudaPython (Join-Path $PSScriptRoot 'bench_e2e.py') @args
++    $resultCode = $LASTEXITCODE
++} finally { Pop-Location }
++exit $resultCode
+diff --git a/run_selftest_v07.ps1 b/run_selftest_v07.ps1
+new file mode 100644
+index 0000000..845e6cc
+--- /dev/null
++++ b/run_selftest_v07.ps1
+@@ -0,0 +1,8 @@
++$ErrorActionPreference = 'Stop'
++. (Join-Path $PSScriptRoot '_python.ps1')
++Push-Location $PSScriptRoot
++try {
++    & $cudaPython (Join-Path $PSScriptRoot 'selftest_v07.py') @args
++    $resultCode = $LASTEXITCODE
++} finally { Pop-Location }
++exit $resultCode
+diff --git a/selftest_v07.py b/selftest_v07.py
+new file mode 100644
+index 0000000..7f131d7
+--- /dev/null
++++ b/selftest_v07.py
+@@ -0,0 +1,601 @@
++"""v0.7 tests: I/O ledger, coalesced reads, layer protection, speculative-read bookkeeping,
++thread safety of the expert cache, RAM guard, spill tier, prefix-reuse equivalence, and
++reference checks for routing, FP4/FP8 decode and residual/norm arithmetic.
++
++    python selftest_v07.py
++
++No GPU and no model weights are needed. Two groups:
++  * storage / cache / generation tests need only the standard library and NumPy. If
++    PyTorch is not importable the cache tests use a small NumPy stand-in for the four
++    torch calls the cache makes, so they run anywhere.
++  * ReferenceArithmeticTests need PyTorch (CPU is enough) and are skipped without it.
++"""
++import json
++import os
++from pathlib import Path
++import random
++import tempfile
++import threading
++from types import SimpleNamespace
++import unittest
++
++import numpy as np
++
++from cache_policy import Frequency, Tier, simulate
++from frustum_loader import RangeReader
++from generation import drive
++from io_ledger import IOLedger
++from selftest import write_checkpoint
++from spill_tier import SpillTier
++
++try:
++    import torch as real_torch
++except ImportError:
++    real_torch = None
++
++
++class _Array:
++    """Stand-in for a CPU uint8 tensor: the cache only moves it and tests read it back."""
++    def __init__(self, data):
++        self.data = data
++
++    def to(self, device):
++        return _Array(self.data.copy())
++
++    def numpy(self):
++        return self.data
++
++
++STANDIN = SimpleNamespace(uint8=np.uint8, device=lambda name: SimpleNamespace(type=str(name).split(':')[0]),
++                          frombuffer=lambda buffer, dtype: _Array(np.frombuffer(buffer, dtype=dtype)))
++TORCH = real_torch or STANDIN
++
++
++class Clock:
++    def __init__(self):
++        self.now = 0.0
++
++    def __call__(self):
++        return self.now
++
++
++class LedgerTests(unittest.TestCase):
++    def test_busy_time_is_an_interval_union_and_depth_is_time_weighted(self):
++        clock = Clock()
++        ledger = IOLedger(clock)
++        ledger.submitted(); ledger.submitted()
++        clock.now = 1.0; ledger.read_begin()          # A starts
++        clock.now = 2.0; ledger.read_begin()          # B starts, A still running
++        clock.now = 4.0; ledger.read_end(100)         # A ends
++        clock.now = 5.0; ledger.read_end(300)         # B ends
++        clock.now = 9.0                               # idle
++        ledger.read_begin(queued=False); clock.now = 10.0; ledger.read_end(100)
++        total = ledger.snapshot()
++        self.assertAlmostEqual(total['busy_seconds'], 5.0)            # [1,5] and [9,10], not 3+3+1
++        self.assertAlmostEqual(total['depth_seconds'], 1 + 2 * 2 + 1 + 1)
++        self.assertAlmostEqual(total['mean_queue_depth'], 7 / 5)
++        self.assertEqual((total['max_depth'], total['max_queued'], total['bytes_read']), (2, 2, 500))
++        self.assertAlmostEqual(total['effective_MBps'], 500 / 1e6 / 5.0)
++        self.assertAlmostEqual(total['drive_utilization'], 0.5)
++
++    def test_overlap_is_drive_time_while_compute_was_not_waiting(self):
++        clock = Clock()
++        ledger = IOLedger(clock)
++        ledger.read_begin(queued=False)               # read runs over [0, 10]
++        clock.now = 4.0; ledger.wait_begin()          # compute blocks over [4, 10]
++        clock.now = 10.0; ledger.read_end(1); ledger.wait_end()
++        total = ledger.snapshot()
++        self.assertAlmostEqual(total['blocked_seconds'], 6.0)
++        self.assertAlmostEqual(total['busy_blocked_seconds'], 6.0)
++        self.assertAlmostEqual(total['overlap_fraction'], 0.4)
++
++    def test_unique_and_repeated_bytes_and_step_deltas(self):
++        ledger = IOLedger(Clock())
++        ledger.served('a', 10, 'disk'); ledger.served('b', 10, 'disk'); ledger.served('a', 10, 'gpu')
++        first = ledger.step()
++        self.assertEqual((first['unique_bytes'], first['repeat_bytes'], first['gpu_hits']), (20, 0, 1))
++        ledger.served('a', 10, 'disk'); ledger.served('c', 10, 'host'); ledger.served('d', 10, 'spill')
++        second = ledger.step()
++        self.assertEqual((second['unique_bytes'], second['repeat_bytes']), (0, 10))
++        self.assertEqual((second['requests'], second['host_hits'], second['spill_hits'], second['disk_reads']),
++                         (3, 1, 1, 1))
++        self.assertAlmostEqual(ledger.snapshot()['reread_amplification'], 1.5)
++        self.assertIsNone(IOLedger(Clock()).snapshot()['effective_MBps'])
++
++    def test_threaded_updates_balance(self):
++        ledger = IOLedger()
++        def work():
++            for _ in range(500):
++                ledger.submitted(); ledger.read_begin(); ledger.read_end(3)
++        threads = [threading.Thread(target=work) for _ in range(8)]
++        [t.start() for t in threads]; [t.join() for t in threads]
++        self.assertEqual((ledger._inflight, ledger._queued, ledger.bytes_read, ledger.reads_started),
++                         (0, 0, 12000, 4000))
++
++
++class Fixture(unittest.TestCase):
++    layers, experts = 4, 8
++
++    def setUp(self):
++        from expert_cache import TieredExpertCache
++        self.cls = TieredExpertCache
++        self.tmp = tempfile.TemporaryDirectory()
++        self.addCleanup(self.tmp.cleanup)
++        self.root = Path(self.tmp.name) / 'model'
++        self.root.mkdir()
++        self.catalog = write_checkpoint(self.root, layers=self.layers, experts=self.experts)
++        reader = RangeReader()
++        self.truth = {}
++        for layer in range(self.layers):
++            for expert in list(range(self.experts)) + ['shared']:
++                self.truth[(layer, expert)] = [bytes(reader.read(self.catalog.tensors[n]))
++                                               for n in self.names(layer, expert)]
++        reader.close()
++
++    @staticmethod
++    def names(layer, expert):
++        prefix = f'layers.{layer}.ffn.' + ('shared_experts' if expert == 'shared' else f'experts.{expert}')
++        return [f'{prefix}.{w}.{kind}' for w in ('w1', 'w2', 'w3') for kind in ('weight', 'scale')]
++
++    def make(self, gpu_keys, host_keys=0, **options):
++        cache = self.cls(TORCH, self.catalog, 'cpu', gpu_keys * 384, host_keys * 384, **options)
++        self.addCleanup(cache.close)
++        for key in self.truth:
++            cache.plan[key] = self.names(*key)
++        return cache
++
++    def check(self, cache, key, entry):
++        self.assertEqual([bytes(np.asarray(t.numpy()).tobytes()) for t in entry.tensors], self.truth[key], key)
++        self.assertLessEqual(cache.gpu.used, cache.gpu.budget)
++        self.assertLessEqual(cache.host.used, max(cache.host.budget, 0))
++        self.assertEqual(set(cache.cache), set(cache.gpu.order))
++        self.assertEqual(set(cache.ram), set(cache.host.order))
++
++
++class ReadGroupTests(Fixture):
++    def test_one_read_same_bytes(self):
++        calls = []
++        reader = RangeReader()
++        original = reader.readinto
++        reader.readinto = lambda item, dest, start=0: (calls.append(item.size), original(item, dest, start))[1]
++        items = [self.catalog.tensors[n] for n in self.names(2, 5)]
++        buffers = reader.read_group(items[::-1])
++        self.assertEqual([bytes(b) for b in buffers], self.truth[(2, 5)][::-1])
++        self.assertEqual(calls, [6 * 64])           # six adjacent tensors, one positioned read
++        self.assertEqual(reader.bytes_read, 6 * 64)
++        reader.close()
++
++    def test_gaps_split_reads_and_mmap_mode_is_unchanged(self):
++        scattered = [self.catalog.tensors[n] for n in
++                     ('head.weight', self.names(0, 0)[0], 'layers.3.ffn.gate.bias', self.names(0, 0)[1])]
++        reader = RangeReader()
++        expected = [bytes(reader.read(item)) for item in scattered]
++        for gap, mode in ((0, 'direct'), (1 << 20, 'direct'), (0, 'mmap')):
++            other = RangeReader(mode=mode)
++            self.assertEqual([bytes(b) for b in other.read_group(scattered, max_gap=gap)], expected)
++            if mode == 'direct' and gap == 0:
++                self.assertEqual(other.bytes_read, sum(i.size for i in scattered))   # no gap bytes read
++            other.close()
++        reader.close()
++
++    def test_coalescing_flag_changes_reads_not_bytes(self):
++        for coalesce in (True, False):
++            cache = self.make(4, coalesce=coalesce)
++            self.check(cache, (1, 2), cache.get((1, 2)))
++            self.assertEqual(cache.reader.bytes_read, 384)
++            self.assertEqual(cache.ledger.snapshot()['bytes_read'], 384)
++
++
++class LayerProtectionTests(Fixture):
++    def run_layer(self, cache, protect):
++        a, b, c = (0, 0), (0, 1), (0, 2)
++        for key in (a, b):
++            cache.get(key)                              # a is now the least recently used
++        cache.new_pass()
++        if protect:
++            cache.begin_layer([c, a])
++        for key in (c, a):                              # same layer needs c, then a
++            self.check(cache, key, cache.get(key, (key,)))
++        return cache.disk_reads
++
++    def test_same_layer_expert_is_not_evicted_before_use(self):
++        old = self.run_layer(self.make(2, gpu_policy='lru', io_threads=0, protect_layer=False), False)
++        new = self.run_layer(self.make(2, gpu_policy='lru', io_threads=0, protect_layer=True), True)
++        self.assertEqual((old, new), (4, 3))            # v0.6 re-reads a; v0.7 evicts b instead
++
++    def test_tier_smaller_than_a_layer_falls_back(self):
++        cache = self.make(1, protect_layer=True)
++        keys = [(1, 0), (1, 1), (1, 2)]
++        cache.begin_layer(keys)
++        for key in keys:
++            self.check(cache, key, cache.get(key, (key,)))
++        self.assertEqual(cache.evictions, 2)
++
++    def test_host_copy_of_layer_expert_survives_admission(self):
++        a, b = (2, 0), (2, 1)
++        extra = {}
++        for protect in (False, True):
++            cache = self.make(1, host_keys=2, io_threads=0, protect_layer=protect)
++            cache.get(a); cache.new_pass()              # a: on GPU and in RAM
++            cache.get((3, 7))                           # a leaves the GPU; RAM holds a (oldest) and (3, 7)
++            cache.new_pass(); cache.begin_layer([b, a])
++            reads = cache.disk_reads
++            cache.get(b, (b,))                          # RAM must make room: not by dropping a
++            self.check(cache, a, cache.get(a, (a,)))
++            extra[protect] = (cache.disk_reads - reads, cache.host_hits)
++        self.assertEqual(extra, {False: (2, 0), True: (1, 1)})
++
++    def test_policy_protected_admission_and_replay_accounting(self):
++        frequency, tier = Frequency(), Tier(20, 'lru')
++        tier.add('x', 10); tier.add('y', 10)
++        self.assertEqual(tier.admit('z', 10, frequency, protected=('x',)), ['y'])
++        self.assertIsNone(Tier(10, 'lru').admit('z', 20, frequency))
++        steps = [['L0.ffn.a', 'L0.ffn.b'], ['L0.ffn.c', 'L0.ffn.a']]
++        sizes = dict.fromkeys(['L0.ffn.a', 'L0.ffn.b', 'L0.ffn.c'], 10)
++        group = lambda key: key.split('.ffn.')[0]
++        plain = simulate(steps, sizes, 20, policy='lru')
++        protected = simulate(steps, sizes, 20, policy='lru', group=group)
++        self.assertEqual((plain[1]['disk_reads'], protected[1]['disk_reads']), (2, 1))
++        for record in plain + protected:
++            self.assertEqual(record['unique_disk_bytes'] + record['repeat_disk_bytes'], record['disk_bytes'])
++        self.assertEqual(plain[1]['repeat_disk_bytes'], 10)
++
++
++class SpeculativeTests(Fixture):
++    def test_wrong_guess_is_cancelled_or_counted_and_right_guess_is_adopted(self):
++        cache = self.make(4, io_threads=1)
++        gate = threading.Event()
++        original = cache.reader.read_group
++        cache.reader.read_group = lambda items, **kw: (gate.wait(5), original(items, **kw))[1]
++        guesses = [(1, e) for e in range(4)]
++        cache.prefetch(guesses, speculative=True)        # the single reader starts guess 0, queues the rest
++        self.assertEqual(cache.speculative, set(guesses))
++        cache.begin_layer([(1, 1), (1, 6)])
++        cache.discard_pending(keep=[(1, 1), (1, 6)])     # the router chose 1 and 6
++        gate.set()
++        for key in ((1, 1), (1, 6)):
++            self.check(cache, key, cache.get(key, (key,)))
++        totals = cache.ledger.snapshot()
++        self.assertEqual(totals['speculative_issued'], 4)
++        self.assertEqual(totals['speculative_used'], 1)
++        self.assertEqual(totals['speculative_cancelled'] + totals['speculative_wasted'], 3)
++        self.assertLessEqual(totals['speculative_wasted'], 1)     # at most the one already reading
++        self.assertFalse(cache.pending)
++        self.assertFalse(cache.speculative)
++        cache.pool.shutdown(wait=True)
++        self.assertEqual((cache.ledger._inflight, cache.ledger._queued), (0, 0))
++
++    def test_guess_for_resident_expert_reads_nothing(self):
++        cache = self.make(4)
++        cache.get((0, 0))
++        before = cache.reader.bytes_read
++        cache.prefetch([(0, 0)], speculative=True)
++        self.assertFalse(cache.pending)
++        self.assertEqual(cache.reader.bytes_read, before)
++        self.assertTrue(cache.resident((0, 0)))
++        self.assertFalse(cache.resident((0, 1)))
++
++
++class AsyncSafetyTests(Fixture):
++    def test_random_prefetch_discard_get_always_returns_exact_bytes(self):
++        keys = sorted((k for k in self.truth if k[1] != 'shared'), key=str)
++        for seed in range(6):
++            rng = random.Random(seed)
++            cache = self.make(rng.choice((1, 2, 5)), host_keys=rng.choice((0, 3, 8)), io_threads=rng.choice((1, 4)),
++                              gpu_policy=rng.choice(('lru', 'lfu')), protect_layer=rng.random() < 0.7,
++                              coalesce=rng.random() < 0.7)
++            for step in range(250):
++                layer = rng.randrange(self.layers)
++                chosen = rng.sample([k for k in keys if k[0] == layer], 3)
++                if layer == 0:
++                    cache.new_pass()
++                cache.begin_layer(chosen)
++                cache.discard_pending(keep=chosen)
++                cache.prefetch(chosen)
++                for key in chosen:
++                    self.check(cache, key, cache.get(key, (key,)))
++                guess = rng.sample(keys, 2)
++                cache.prefetch(guess, speculative=True)
++                self.assertTrue(cache.speculative <= set(cache.pending))
++            cache.discard_pending()
++            cache.pool.shutdown(wait=True)
++            totals = cache.ledger.snapshot()
++            self.assertEqual((cache.ledger._inflight, cache.ledger._queued, cache.ledger._blocked), (0, 0, 0))
++            self.assertEqual(totals['requests'], 750)
++            self.assertEqual(totals['gpu_hits'] + totals['host_hits'] + totals['disk_reads'], 750)
++            self.assertEqual(totals['speculative_issued'],
++                             totals['speculative_used'] + totals['speculative_cancelled'] + totals['speculative_wasted'])
++
++    def test_failed_read_surfaces_and_leaves_cache_usable(self):
++        cache = self.make(2, io_threads=2)
++        original = cache.reader.read_group
++        def broken(items, **kw):
++            raise OSError('drive unplugged')
++        cache.reader.read_group = broken
++        cache.prefetch([(0, 0)])
++        with self.assertRaises(OSError):
++            cache.get((0, 0))
++        self.assertNotIn((0, 0), cache.cache)
++        self.assertEqual(cache.ledger._blocked, 0)
++        cache.reader.read_group = original
++        self.check(cache, (0, 0), cache.get((0, 0)))
++
++
++class RamGuardTests(Fixture):
++    def test_host_tier_shrinks_when_ram_is_short_and_never_grows(self):
++        free = [10_000]
++        cache = self.make(1, host_keys=4, io_threads=0, ram_probe=lambda: free[0], ram_floor_bytes=1000)
++        for expert in range(4):
++            cache.get((0, expert))
++        self.assertEqual(len(cache.ram), 4)
++        cache.new_pass()
++        self.assertEqual((cache.host.budget, cache.host_shrinks), (4 * 384, 0))
++        free[0] = 1000 - 2 * 384                        # 768 bytes under the floor
++        cache.new_pass()
++        self.assertEqual((len(cache.ram), cache.host.budget, cache.host_shrinks), (2, 2 * 384, 1))
++        free[0] = 10_000
++        cache.new_pass()
++        self.assertEqual(cache.host.budget, 2 * 384)
++        self.check(cache, (0, 0), cache.get((0, 0)))
++
++
++class SpillTests(Fixture):
++    def spill(self, budget=10 ** 6):
++        return SpillTier(Path(self.tmp.name) / 'spill', budget, 'test-checkpoint')
++
++    def test_second_session_reads_the_copy_and_bytes_are_exact(self):
++        first = self.make(4)
++        first.spill = self.spill()
++        for key in ((0, 1), (2, 3)):
++            self.check(first, key, first.get(key))
++        first.close()
++        self.assertEqual(first.spill.stats()['stores'], 2)
++        second = self.make(4)
++        second.spill = self.spill()
++        for key in ((0, 1), (2, 3), (1, 1)):
++            self.check(second, key, second.get(key))
++        self.assertEqual((second.spill_hits, second.disk_reads), (2, 1))
++        self.assertEqual(second.reader.bytes_read, 384)            # only the expert that had no copy
++        second.close()
++        on_disk = sum(p.stat().st_size for p in second.spill.root.rglob('*.bin'))
++        self.assertEqual(second.spill.stats()['used_bytes'], on_disk)
++        self.assertEqual(len(list(second.spill.root.rglob('*.bin'))), 3)
++
++    def test_corrupt_stale_and_truncated_copies_are_ignored(self):
++        first = self.make(4)
++        first.spill = self.spill()
++        for expert in range(3):
++            first.get((0, expert))
++        first.close()
++        files = {int(p.stem): p for p in (first.spill.root / '0').glob('*.bin')}
++        blob = bytearray(files[0].read_bytes()); blob[-1] ^= 1; files[0].write_bytes(blob)      # flipped bit
++        files[1].write_bytes(files[1].read_bytes()[:-5])                                         # truncated
++        second = self.make(4)
++        second.spill = self.spill()
++        for expert in range(3):
++            self.check(second, (0, expert), second.get((0, expert)))
++        self.assertEqual((second.spill_hits, second.disk_reads, second.spill.stats()['rejected']), (1, 2, 2))
++        second.close()
++        shard = next(self.root.glob('*.safetensors'))
++        os.utime(shard, ns=(1, 1))                                                               # checkpoint changed
++        third = self.make(4)
++        third.spill = self.spill()
++        self.check(third, (0, 2), third.get((0, 2)))
++        self.assertEqual((third.spill_hits, third.disk_reads), (0, 1))
++
++    def test_budget_stops_admission(self):
++        cache = self.make(4)
++        cache.spill = self.spill(budget=384 + 1024 + 100)
++        for expert in range(3):
++            self.check(cache, (1, expert), cache.get((1, expert)))
++        cache.close()
++        stats = cache.spill.stats()
++        self.assertEqual((stats['stores'], stats['skipped_full']), (1, 2))
++        self.assertLessEqual(stats['used_bytes'], stats['budget_bytes'])
++
++
++class PrefixReuseTests(unittest.TestCase):
++    """Reuse must be invisible: same tokens as rebuilding the whole conversation every turn."""
++    class Engine:
++        def __init__(self):
++            self.state, self.prefills, self.fed_tokens = [], 0, 0
++
++        def run(self, tokens, phase, want_logits):
++            if phase == 'prefill':
++                self.state, self.prefills = list(tokens), self.prefills + 1
++            else:
++                assert len(tokens) == 1, 'incremental steps feed one token'
++                self.state += tokens
++            self.fed_tokens += len(tokens)
++            return (tuple(self.state) if want_logits else None), {}
++
++    @staticmethod
++    def pick(state):
++        return hash(state) % 11        # a function of the entire processed sequence; 0 acts as EOS
++
++    def converse(self, turns, reuse):
++        engine, fed, outputs = self.Engine(), [], []
++        for ids, limit in turns:
++            out, _, reused, _ = drive(fed, list(ids), limit, 0, self.pick, engine.run, reuse)
++            self.assertEqual(fed, engine.state)                       # bookkeeping matches the engine
++            self.assertTrue(reused == 0 or reuse)
++            outputs.append((out, reused))
++        return outputs, engine
++
++    def test_reuse_matches_rebuild_on_random_conversations(self):
++        rng = random.Random(7)
++        for _ in range(200):
++            turns, history = [], [rng.randrange(1, 50) for _ in range(rng.randrange(1, 6))]
++            for _ in range(rng.randrange(1, 5)):
++                turns.append((list(history), rng.randrange(1, 6)))
++                out, *_ = drive([], list(history), turns[-1][1], 0, self.pick, self.Engine().run, False)
++                mode = rng.random()
++                if mode < 0.6:      # normal follow-up: previous prompt + reply + new user tokens
++                    history = history + out + [rng.randrange(1, 50) for _ in range(rng.randrange(1, 4))]
++                elif mode < 0.8:    # edited history: must not reuse
++                    history = [rng.randrange(1, 50)] + history[1:] + [5]
++                else:               # identical or shorter prompt: nothing new to extend
++                    history = history[:rng.randrange(1, len(history) + 1)]
++            with_reuse, engine = self.converse(turns, True)
++            without, rebuilt = self.converse(turns, False)
++            self.assertEqual([o for o, _ in with_reuse], [o for o, _ in without])
++            self.assertLessEqual(engine.fed_tokens, rebuilt.fed_tokens)
++
++    def test_reuse_requires_a_strict_exact_prefix(self):
++        engine, fed = self.Engine(), []
++        drive(fed, [3, 4, 5], 2, 0, self.pick, engine.run, True)
++        covered = list(fed)
++        for ids, expect in ((covered + [9], len(covered)), (covered, 0), (covered[:-1], 0),
++                            ([8] + covered[1:] + [9], 0)):
++            copy, other = list(covered), self.Engine()
++            other.state = list(covered)
++            _, _, reused, _ = drive(copy, ids, 1, 0, self.pick, other.run, True)
++            self.assertEqual(reused, expect, ids)
++
++    def test_interrupted_step_forces_rebuild(self):
++        engine, fed = self.Engine(), []
++        drive(fed, [3, 4], 2, 0, self.pick, engine.run, True)
++        def failing(tokens, phase, want_logits):
++            raise KeyboardInterrupt
++        with self.assertRaises(KeyboardInterrupt):
++            drive(fed, fed + [7], 2, 0, self.pick, failing, True)
++        self.assertEqual(fed, [])
++
++
++class RooflineTests(Fixture):
++    def test_verdict_follows_measured_drive_utilisation(self):
++        import roofline
++        self.assertEqual(roofline.arithmetic()['all_miss_bytes_per_token'], 40 * 6 * 18_800_640)
++        def evidence(busy, wall, unique, repeat):
++            io = dict.fromkeys(('requests', 'gpu_hits', 'host_hits', 'spill_hits', 'disk_reads', 'depth_seconds',
++                                'blocked_seconds', 'busy_blocked_seconds', 'speculative_issued', 'speculative_used',
++                                'speculative_wasted', 'speculative_wasted_bytes'), 0)
++            io.update(busy_seconds=busy, bytes_read=unique + repeat, unique_bytes=unique, repeat_bytes=repeat,
++                      requests=4, disk_reads=4)
++            return dict(token_timings=[dict(phase='prefill', total_seconds=9.0),
++                                       dict(phase='decode', total_seconds=wall, io=io)])
++        bound = roofline.measured(evidence(7.5, 8.0, 1e9, 3e9))
++        self.assertTrue(bound['verdict'].startswith('Storage-bound'))
++        self.assertIn('75% of the bytes were re-reads', bound['verdict'])
++        self.assertAlmostEqual(bound['effective_MBps'], 4e9 / 1e6 / 7.5)
++        self.assertTrue(roofline.measured(evidence(2.0, 8.0, 1e9, 0))['verdict'].startswith('Compute-bound'))
++        self.assertTrue(roofline.measured(evidence(5.6, 8.0, 1e9, 0))['verdict'].startswith('Mixed'))
++        self.assertIsNone(roofline.measured(dict(token_timings=[dict(phase='decode', total_seconds=1.0)])))
++
++    def test_live_ledger_step_feeds_roofline(self):
++        import roofline
++        cache = self.make(2, io_threads=2, gpu_policy='lru')
++        cache.ledger.step()
++        for key in ((0, 0), (0, 1), (0, 2), (0, 0)):       # the last one was evicted: a re-read
++            cache.get(key)
++        step = cache.ledger.step()
++        result = roofline.measured(dict(token_timings=[dict(phase='decode', total_seconds=1.0, io=step)]))
++        self.assertAlmostEqual(result['first_time_GB_per_token'] * 1e9, 3 * 384)
++        self.assertAlmostEqual(result['reread_GB_per_token'] * 1e9, 384)
++        self.assertEqual(result['disk_rate'], 1.0)
++
++
++@unittest.skipIf(real_torch is None, 'PyTorch not installed: reference arithmetic checks skipped')
++class ReferenceArithmeticTests(unittest.TestCase):
++    """CPU PyTorch against independent NumPy float64 references. Needs no GPU or weights."""
++    def test_fp4_decode_exhaustive_and_fast_path_bit_exact(self):
++        from expert_correctness import cpu_decode, gpu_decode, gpu_decode_reference
++        packed = np.arange(256, dtype=np.uint8).reshape(16, 16)
++        scale = np.arange(119, 135, dtype=np.uint8).reshape(16, 1)
++        fast = gpu_decode(real_torch.from_numpy(packed), real_torch.from_numpy(scale))
++        np.testing.assert_array_equal(fast.numpy(), cpu_decode(packed, scale))
++        rng = np.random.default_rng(3)
++        p = real_torch.from_numpy(rng.integers(0, 256, (64, 96), dtype=np.uint8))
++        s = real_torch.from_numpy(rng.integers(100, 150, (64, 6), dtype=np.uint8))
++        a, b = gpu_decode(p, s), gpu_decode_reference(p, s)
++        self.assertTrue(real_torch.equal(a.view(real_torch.int32), b.view(real_torch.int32)))
++        with self.assertRaises(ValueError):
++            gpu_decode(p, real_torch.full_like(s, 255))
++
++    def test_fp8_decode_all_finite_codes_with_block_scales(self):
++        from streamed_moe import fp8_decode_cpu
++        raw = np.arange(256, dtype=np.uint8).repeat(16).reshape(64, 64)
++        raw[(raw & 127) == 127] = 0
++        scale = np.random.default_rng(4).integers(110, 140, (2, 2), dtype=np.uint8)
++        value = real_torch.from_numpy(raw.copy()).view(real_torch.float8_e4m3fn).float()
++        value.view(2, 32, 2, 32).mul_(real_torch.exp2(real_torch.from_numpy(scale).float() - 127)[:, None, :, None])
++        np.testing.assert_array_equal(value.numpy().astype(np.float64), fp8_decode_cpu(raw, scale))
++        with self.assertRaises(ValueError):
++            fp8_decode_cpu(np.full((32, 32), 0x7f, dtype=np.uint8), scale[:1, :1])
++
++    def test_routing_matches_float64_reference(self):
++        from streamed_moe import route, route_reference
++        cfg = dict(num_experts_per_tok=6, norm_topk_prob=True, routed_scaling_factor=1.5)
++        generator = real_torch.Generator().manual_seed(5)
++        for _ in range(20):
++            x = real_torch.randn(3, 64, generator=generator).to(real_torch.bfloat16)
++            weight = real_torch.randn(384, 64, generator=generator).to(real_torch.bfloat16)
++            bias = real_torch.randn(384, generator=generator) * 0.1
++            weights, ids = route(x, weight, bias, cfg)
++            ref_weights, ref_ids = route_reference(x, weight, bias, cfg)
++            self.assertTrue(real_torch.equal(ids, ref_ids))
++            real_torch.testing.assert_close(weights, ref_weights, rtol=2e-5, atol=2e-6)
++            real_torch.testing.assert_close(weights.sum(-1), real_torch.full((3,), 1.5), rtol=1e-5, atol=1e-5)
++
++    def test_rmsnorm_and_residual_mixing_match_float64(self):
++        from block_primitives import hc_mixes, hc_post, hc_pre, rms_norm
++        generator = real_torch.Generator().manual_seed(6)
++        hc, dim, eps = 4, 48, 1e-6
++        x = real_torch.randn(1, 3, hc, dim, generator=generator)
++        fn = real_torch.randn(2 * hc + hc * hc, hc * dim, generator=generator) * 0.1
++        scale = real_torch.rand(3, generator=generator) + 0.5
++        base = real_torch.randn(2 * hc + hc * hc, generator=generator) * 0.1
++        pre, post, comb = hc_mixes(x, fn, scale, base, hc=hc, iters=20, eps=eps, norm_eps=1e-20)
++        flat = x.double().numpy().reshape(1, 3, -1)
++        mix = flat @ fn.double().numpy().T / np.sqrt((flat ** 2).mean(-1, keepdims=True) + 1e-20)
++        sc, bs = scale.double().numpy(), base.double().numpy()
++        sigmoid = lambda z: 1 / (1 + np.exp(-z))
++        pr = sigmoid(mix[..., :hc] * sc[0] + bs[:hc]) + eps
++        po = 2 * sigmoid(mix[..., hc:2 * hc] * sc[1] + bs[hc:2 * hc])
++        co = (mix[..., 2 * hc:] * sc[2] + bs[2 * hc:]).reshape(1, 3, hc, hc)
++        co = np.exp(co - co.max(-1, keepdims=True)); co = co / co.sum(-1, keepdims=True) + eps
++        co /= co.sum(-2, keepdims=True) + eps
++        for _ in range(19):
++            co /= co.sum(-1, keepdims=True) + eps; co /= co.sum(-2, keepdims=True) + eps
++        for actual, expected in ((pre, pr), (post, po), (comb, co)):
++            np.testing.assert_allclose(actual.numpy(), expected, rtol=2e-4, atol=2e-5)
++        arr = x.double().numpy()
++        np.testing.assert_allclose(hc_pre(x, pre).numpy(), (pr[..., None] * arr).sum(-2), rtol=1e-4, atol=1e-5)
++        part = real_torch.randn(1, 3, dim, generator=generator)
++        expected = po[..., None] * part.double().numpy()[..., None, :] + (co[..., None] * arr[..., None, :]).sum(-3)
++        np.testing.assert_allclose(hc_post(part, x, post, comb).numpy(), expected, rtol=1e-4, atol=1e-5)
++        weight = real_torch.rand(dim, generator=generator) + 0.5
++        v = part.double().numpy()
++        norm = weight.double().numpy() * v / np.sqrt((v * v).mean(-1, keepdims=True) + eps)
++        np.testing.assert_allclose(rms_norm(part, weight, eps).numpy(), norm, rtol=1e-5, atol=1e-6)
++
++    def test_prediction_gate_reads_only_when_measurably_right(self):
++        from streamed_moe import StreamedMoE
++        moe = StreamedMoE.__new__(StreamedMoE)
++        moe.predict_next, moe.predict_mode, moe.predict_threshold, moe.predict_warmup = 6, 'gated', 0.6, 3
++        moe._history, moe.prediction = {}, dict(guessed=0, routed=0, routed_and_guessed=0)
++        moe.sources = {n: dict(layers=0, guessed=0, correct=0, cold_guessed=0, cold_correct=0,
++                               cold_precision_ema=None, reads_issued=0) for n in ('router', 'history')}
++        for layer in range(4):                       # router guesses wrong, history guesses right
++            moe._predicted = (layer, {'router': {1, 2}, 'history': {7, 8}}, {'router': {1, 2}, 'history': {7, 8}})
++            self.assertFalse(moe._confident('history') and layer < 3)
++            moe._score(layer, {7, 8, 9})
++        self.assertTrue(moe._confident('history'))
++        self.assertFalse(moe._confident('router'))
++        stats = moe.prediction_stats()
++        self.assertEqual((stats['sources']['router']['cold_precision'], stats['sources']['history']['cold_precision']),
++                         (0.0, 1.0))
++        self.assertEqual(stats['recall'], 0.0)
++        moe.predict_mode = 'shadow'
++        self.assertFalse(moe._confident('history'))
++        moe.predict_mode = 'always'
++        self.assertTrue(moe._confident('router'))
++
++
++if __name__ == '__main__':
++    result = unittest.main(exit=False, verbosity=2).result
++    print(json.dumps(dict(status='PASS' if result.wasSuccessful() else 'FAIL', tests=result.testsRun,
++                          skipped=len(result.skipped), failures=len(result.failures), errors=len(result.errors),
++                          torch='real' if real_torch is not None else 'NumPy stand-in for the cache tests; '
++                                'ReferenceArithmeticTests skipped')))
++    raise SystemExit(0 if result.wasSuccessful() else 1)
+diff --git a/spill_tier.py b/spill_tier.py
+new file mode 100644
+index 0000000..7721f18
+--- /dev/null
++++ b/spill_tier.py
+@@ -0,0 +1,150 @@
++"""Optional third tier: exact copies of routed experts on a faster local drive (v0.7).
++
++Why: a RAM cache can only remove *repeated* reads. An expert the conversation has
++not touched yet has to come from storage, and on a USB link that is the slow part.
++If the machine has an internal SSD with spare room, experts that were read once
++from the model drive are also written there, and later reads (this session or a
++later one) come from the fast drive instead. Nothing is approximated: a spill
++file holds the checkpoint's bytes for one expert and is only used when
++
++  - it names the same shard files, offsets and sizes as the catalog,
++  - those shard files still have the size and modification time recorded, and
++  - the payload matches its stored CRC-32.
++
++Anything else (missing, truncated, stale, corrupt) is ignored and the expert is
++read from the checkpoint as before. The checkpoint itself is never written.
++
++Off unless --spill-dir is given. The tier fills up to its byte budget and then
++stops admitting; it never deletes. Remove the folder to reset it.
++
++STATUS: unit-tested on Linux in the development sandbox. UNRUN on Windows and
++UNMEASURED: whether it helps depends on the spill drive really being faster than
++the model drive. bench_e2e.py --spill-dir measures that.
++"""
++from concurrent.futures import ThreadPoolExecutor
++import hashlib
++import json
++import os
++from pathlib import Path
++import struct
++import threading
++import zlib
++
++MAGIC = b'FRSPILL1'
++HEADER_ALLOWANCE = 1024  # reserved per file at admission, corrected to the real size once written
++
++
++class SpillTier:
++    def __init__(self, root, budget_bytes, checkpoint_id, verify=True, max_queued=8):
++        self.root = Path(root) / hashlib.sha256(str(checkpoint_id).encode()).hexdigest()[:16]
++        self.root.mkdir(parents=True, exist_ok=True)
++        self.budget = int(budget_bytes)
++        self.verify = verify
++        self.max_queued = max_queued
++        self._lock = threading.Lock()
++        self._writer = ThreadPoolExecutor(1, thread_name_prefix='frustum-spill')
++        self._queued = 0
++        self._stat = {}
++        self.used = sum(entry.stat().st_size for entry in self.root.rglob('*.bin'))
++        self.hits = self.hit_bytes = self.stores = self.rejected = self.skipped_full = self.skipped_busy = 0
++        self.write_errors = 0
++
++    def _path(self, key):
++        return self.root / str(key[0]) / f'{key[1]}.bin'
++
++    def identity(self, items):
++        """What must be unchanged for a spill file to stand in for these tensors."""
++        out = []
++        for item in items:
++            stat = self._stat.get(item.path)
++            if stat is None:
++                info = os.stat(item.path)
++                stat = self._stat[item.path] = (info.st_size, info.st_mtime_ns)
++            out.append([item.path.name, item.offset, item.size, stat[0], stat[1]])
++        return out
++
++    def load(self, key, identity):
++        """The expert's buffers in catalog order, or None when no valid copy exists."""
++        path = self._path(key)
++        try:
++            data = bytearray(path.stat().st_size)
++            with open(path, 'rb', buffering=0) as handle:
++                view, done = memoryview(data), 0
++                while done < len(data):
++                    got = handle.readinto(view[done:])
++                    if not got:
++                        break
++                    done += got
++            if done != len(data) or data[:8] != MAGIC:
++                raise ValueError('short or foreign file')
++            length, = struct.unpack_from('<I', data, 8)
++            header = json.loads(bytes(data[12:12 + length]))
++            payload = view[12 + length:]
++            if header['identity'] != identity or len(payload) != sum(row[2] for row in identity):
++                raise ValueError('stale')
++            if self.verify and zlib.crc32(payload) != header['crc32']:
++                raise ValueError('checksum')
++        except FileNotFoundError:
++            return None
++        except (OSError, ValueError, KeyError, struct.error):
++            with self._lock:
++                self.rejected += 1
++            return None
++        buffers, start = [], 0
++        for row in identity:
++            buffers.append(payload[start:start + row[2]])
++            start += row[2]
++        with self._lock:
++            self.hits += 1
++            self.hit_bytes += len(payload)
++        return buffers
++
++    def store(self, key, buffers, identity):
++        """Queue an exact copy for writing. Never blocks the reader; drops the copy when busy or full."""
++        size = sum(len(buffer) for buffer in buffers) + HEADER_ALLOWANCE
++        with self._lock:
++            if self.used + size > self.budget:
++                self.skipped_full += 1
++                return False
++            if self._queued >= self.max_queued:
++                self.skipped_busy += 1
++                return False
++            self._queued += 1
++            self.used += size
++        self._writer.submit(self._write, key, buffers, identity, size)
++        return True
++
++    def _write(self, key, buffers, identity, size):
++        path = self._path(key)
++        temporary = path.with_suffix(f'.tmp{threading.get_ident()}')
++        try:
++            crc = 0
++            for buffer in buffers:
++                crc = zlib.crc32(buffer, crc)
++            header = json.dumps(dict(identity=identity, crc32=crc)).encode()
++            path.parent.mkdir(parents=True, exist_ok=True)
++            with open(temporary, 'wb') as handle:
++                handle.write(MAGIC + struct.pack('<I', len(header)) + header)
++                for buffer in buffers:
++                    handle.write(buffer)
++            os.replace(temporary, path)  # readers see the old file or the complete new one
++            with self._lock:
++                self.stores += 1
++                self.used += 12 + len(header) - HEADER_ALLOWANCE  # the budget counts whole files
++        except OSError:
++            with self._lock:
++                self.write_errors += 1
++                self.used -= size
++        finally:
++            with self._lock:
++                self._queued -= 1
++
++    def stats(self):
++        with self._lock:
++            return dict(directory=str(self.root), budget_bytes=self.budget, used_bytes=self.used, hits=self.hits,
++                        hit_bytes=self.hit_bytes, stores=self.stores, rejected=self.rejected,
++                        skipped_full=self.skipped_full, skipped_busy=self.skipped_busy,
++                        write_errors=self.write_errors, verify=self.verify)
++
++    def close(self):
++        self._writer.shutdown(wait=True)
+diff --git a/streamed_moe.py b/streamed_moe.py
+index e8db105..fea62a0 100755
+--- a/streamed_moe.py
++++ b/streamed_moe.py
+@@ -64,7 +64,7 @@ def expert_forward(x,weight,linear,limit):
+ class StreamedMoE:
+     def __init__(self,catalog,cache_mib=256,*,host_cache_mib=0,router_cache_mib=32,io_threads=4,
+                  gpu_policy='lfu',host_policy='lru',pin_shared=False,cap_bytes=12*GIB,headroom_bytes=2*GIB,
+-                 lookahead=None,predict_next=None):
++                 lookahead=None,predict_next=None,predict_mode=None,predict_threshold=0.6,predict_warmup=40):
+         """cache_mib: GPU budget for packed experts. host_cache_mib: optional RAM tier behind it.
+         router_cache_mib: give it the size of all router weights to stop re-reading them per token.
+         pin_shared: never evict shared experts (the budget must have room for all of them).
+@@ -73,6 +73,15 @@ class StreamedMoE:
+         start reading that many of its likely experts early (v0.6). The real routing still decides
+         which experts run, so a wrong guess costs drive time, never accuracy. 0 disables.
+         Default: FRUSTUM_PREDICT_NEXT, else 0 (off until measured: wrong guesses compete with real reads).
++        predict_mode (v0.7; FRUSTUM_PREDICT_MODE): what to do with the guesses.
++          shadow  score them, never read. Costs one small matrix product per layer and no drive time.
++          gated   (default) read a source's guesses only after predict_warmup scored layers and while
++                  the measured share of its not-yet-resident guesses that were then routed stays at
++                  or above predict_threshold; otherwise behave like shadow.
++          always  read every guess, as v0.6 did.
++        Guesses come from two sources, scored separately: 'router' (next layer's router on this
++        layer's input) and 'history' (what the next layer used on the previous step). Reads are
++        issued after this layer's experts have run, so they never queue ahead of its own reads.
+         """
+         self.catalog=catalog
+         self.cfg=catalog.config['text_config']
+@@ -89,8 +98,15 @@ class StreamedMoE:
+         if predict_next is None:
+             predict_next=int(os.environ.get('FRUSTUM_PREDICT_NEXT','0'))
+         self.predict_next=0 if io_threads==0 else max(0,predict_next)
+-        self._predicted=None  # (layer, set of expert ids) guessed during the previous layer
++        self.predict_mode=(predict_mode or os.environ.get('FRUSTUM_PREDICT_MODE','gated')).strip().lower()
++        if self.predict_mode not in ('shadow','gated','always'):
++            raise ValueError('predict_mode is shadow, gated or always')
++        self.predict_threshold,self.predict_warmup=float(predict_threshold),int(predict_warmup)
++        self._predicted=None  # (layer, {source: ids}, {source: ids not resident when guessed})
++        self._history={}      # layer -> expert ids routed on the previous decode step
+         self.prediction=dict(guessed=0,routed=0,routed_and_guessed=0)
++        self.sources={name:dict(layers=0,guessed=0,correct=0,cold_guessed=0,cold_correct=0,
++                                cold_precision_ema=None,reads_issued=0) for name in ('router','history')}
+         decoder_test()  # tiny: proves the fast FP4 decoder is exact on this GPU before any weights are used
+ 
+     def _group(self,layer,expert):
+@@ -103,6 +119,13 @@ class StreamedMoE:
+             self.cache.plan[key]=names
+         return key
+ 
++    def _confident(self,source):
++        st=self.sources[source]
++        if self.predict_mode=='always': return True
++        if self.predict_mode=='shadow': return False
++        return (st['layers']>=self.predict_warmup and st['cold_precision_ema'] is not None
++                and st['cold_precision_ema']>=self.predict_threshold)
++
+     def _predict(self,x,layer):
+         nxt=f'layers.{layer+1}.ffn.gate.'
+         if (not self.predict_next or x.shape[0]>2 or nxt+'weight' not in self.catalog.tensors
+@@ -111,15 +134,49 @@ class StreamedMoE:
+         weight=self._router_tensor(nxt+'weight'); bias=self._router_tensor(nxt+'bias')
+         scores=F.softplus(F.linear(x.float(),weight.float())).sqrt()+bias
+         k=min(self.predict_next,scores.shape[-1])
+-        guess={int(e) for e in scores.topk(k,dim=-1).indices.flatten().tolist()}
+-        self._predicted=(layer+1,guess)
+-        self.prediction['guessed']+=len(guess)
+-        self.cache.prefetch([self._group(layer+1,e) for e in sorted(guess)])
++        guesses={'router':{int(e) for e in scores.topk(k,dim=-1).indices.flatten().tolist()},
++                 'history':set(self._history.get(layer+1,()))}
++        cold={name:{e for e in ids if not self.cache.resident(self._group(layer+1,e))}
++              for name,ids in guesses.items()}
++        self._predicted=(layer+1,guesses,cold)
++        self.prediction['guessed']+=len(guesses['router'])
++        issue=[]
++        for name in ('history','router'):
++            if self._confident(name):
++                fresh=sorted(cold[name]-set(issue))
++                self.sources[name]['reads_issued']+=len(fresh)
++                issue+=fresh
++        if issue:
++            self.cache.prefetch([self._group(layer+1,e) for e in issue],speculative=True)
++
++    def _score(self,layer,routed):
++        """Compare the guesses made for this layer with what its router really chose."""
++        if self._predicted is not None and self._predicted[0]==layer:
++            _,guesses,cold=self._predicted
++            self.prediction['routed']+=len(routed)
++            self.prediction['routed_and_guessed']+=len(routed&guesses['router'])
++            for name,ids in guesses.items():
++                st=self.sources[name]
++                st['layers']+=1; st['guessed']+=len(ids); st['correct']+=len(ids&routed)
++                st['cold_guessed']+=len(cold[name]); st['cold_correct']+=len(cold[name]&routed)
++                if cold[name]:
++                    p=len(cold[name]&routed)/len(cold[name])
++                    ema=st['cold_precision_ema']
++                    st['cold_precision_ema']=p if ema is None else 0.9*ema+0.1*p
++        self._predicted=None
++        if self.predict_next:
++            self._history[layer]=set(routed)
+ 
+     def prediction_stats(self):
+         p=self.prediction
++        sources={}
++        for name,st in self.sources.items():
++            sources[name]=dict(st,precision=st['correct']/st['guessed'] if st['guessed'] else None,
++                cold_precision=st['cold_correct']/st['cold_guessed'] if st['cold_guessed'] else None,
++                reading_now=self._confident(name))
+         return dict(p,recall=p['routed_and_guessed']/p['routed'] if p['routed'] else None,
+-                    experts_guessed_per_layer=self.predict_next)
++                    experts_guessed_per_layer=self.predict_next,mode=self.predict_mode,
++                    threshold=self.predict_threshold,warmup_layers=self.predict_warmup,sources=sources)
+ 
+     def _router_tensor(self,name):
+         item=self.catalog.tensors[name]
+@@ -181,15 +238,11 @@ class StreamedMoE:
+         if self._last_layer is None or layer<=self._last_layer:
+             self.cache.new_pass()
+         self._last_layer=layer
++        # v0.7: nothing this layer needs may be evicted while the layer runs.
++        self.cache.begin_layer(keys)
+         self.cache.discard_pending(keep=keys)
+-        routed={int(e) for e in ids_cpu.flatten().tolist()}
+-        if self._predicted is not None and self._predicted[0]==layer:
+-            self.prediction['routed']+=len(routed)
+-            self.prediction['routed_and_guessed']+=len(routed&self._predicted[1])
+-        self._predicted=None
+-        # Queue this layer's reads first, then the guesses for the next layer behind them.
++        self._score(layer,{int(e) for e in ids_cpu.flatten().tolist()})
+         self.cache.prefetch(keys[:1+self.lookahead])
+-        self._predict(x,layer)
+         y=torch.zeros_like(x,dtype=torch.float32)
+         yr=torch.zeros_like(x_cpu,dtype=torch.float32)
+         for pos,key in enumerate(keys):
+@@ -212,6 +265,9 @@ class StreamedMoE:
+                     lambda z,w:self._linear(entry,key,z,w,True),cfg['swiglu_limit'])
+                 yr.index_add_(0,rows,ref.float())
+             del part
++        # v0.7: guesses for the next layer go out only now, when this layer's own reads are done,
++        # so a guess can never delay an expert the router has actually selected.
++        self._predict(x,layer)
+         result=y.to(torch.bfloat16)
+         if not torch.isfinite(result).all(): raise AssertionError('Nonfinite MoE output')
+         metrics={}

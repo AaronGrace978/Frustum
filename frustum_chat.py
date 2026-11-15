@@ -26,7 +26,9 @@ from frustum_loader import Catalog, RangeReader, default_model_root
 from generation import chat_prompt, drive, reusable_prefix  # chat_prompt re-exported for callers
 from layers0_3_block import GIB, SequentialBlocks
 import fused_kernels
+import os_cache
 import placement
+from spill_tier import SpillTier
 
 
 class OutputHead:
@@ -103,7 +105,8 @@ class Session:
 
 
 @torch.inference_mode()
-def generate(session, ids, max_new_tokens, pick, on_token=None, profile_decode=False, verbose=False):
+def generate(session, ids, max_new_tokens, pick, on_token=None, profile_decode=False, verbose=False,
+             trace_routing=False):
     """Generate up to max_new_tokens after the prompt token ids.
 
     Returns (token_ids, timings, reused_prompt_tokens, stopped_at_eos).
@@ -160,6 +163,10 @@ def generate(session, ids, max_new_tokens, pick, on_token=None, profile_decode=F
                       head_logical_bytes=head.reader.bytes_read - head_bytes_before)
         if layer_profile:
             timing['layers'] = layer_profile
+        # v0.7: expert I/O for this step (no synchronisation, so it does not perturb timing).
+        timing['io'] = engine.moe.cache.ledger.step()
+        if trace_routing:
+            timing['routing'] = [record['selected_experts'] for record in records]
         return logits, timing
 
     reused = reusable_prefix(session.fed, ids) if session.reuse else 0
@@ -238,6 +245,18 @@ def main():
     parser.add_argument('--predict-next', type=int,
                         help='Experts of the next layer to start reading early during decode (0 disables). '
                              'Default: FRUSTUM_PREDICT_NEXT, else 0 (off)')
+    parser.add_argument('--predict-mode', choices=('shadow', 'gated', 'always'),
+                        help='What --predict-next does with its guesses: shadow scores them without reading, '
+                             'gated (default) reads only while they are measurably right, always is v0.6')
+    parser.add_argument('--trace-routing', action='store_true',
+                        help='Record the routed experts of every step in --evidence (for decode_cache_replay.py '
+                             'and roofline.py). Unlike --profile-decode it adds no synchronisation')
+    parser.add_argument('--spill-dir', type=Path,
+                        help='Folder on a faster local drive for verified exact copies of experts already read '
+                             '(spill_tier.py). Off unless given')
+    parser.add_argument('--spill-gib', type=float, default=64.0, help='Byte budget for --spill-dir')
+    parser.add_argument('--ram-floor-gib', type=float, default=3.0,
+                        help='Shrink the host RAM tier when free system RAM falls below this; 0 disables')
     parser.add_argument('--legacy', action='store_true',
                         help='v0.4 behaviour for A/B runs: mmap reader, 256 MiB caches, streamed head, no reuse')
     args = parser.parse_args()
@@ -282,9 +301,17 @@ def main():
                        io_threads=0 if args.legacy else args.io_threads, gpu_policy=plan['gpu_policy'],
                        host_policy=plan['host_policy'], pin_shared=plan['pin_shared'],
                        cap_bytes=plan['gpu_cap_bytes'],
-                       predict_next=0 if args.legacy else args.predict_next)
+                       predict_next=0 if args.legacy else args.predict_next,
+                       predict_mode=args.predict_mode)
     engine = SequentialBlocks(catalog, args.context, plan['dense_cache_mib'], plan['expert_cache_mib'],
                               catalog.config['text_config']['num_hidden_layers'], moe_options)
+    if args.ram_floor_gib > 0 and not args.legacy:
+        engine.moe.cache.ram_probe = placement.available_ram
+        engine.moe.cache.ram_floor = int(args.ram_floor_gib * GIB)
+    if args.spill_dir and not args.legacy:
+        checkpoint_id = (str(catalog.root), catalog.index.get('metadata', {}).get('total_size'), len(catalog.tensors))
+        engine.moe.cache.spill = SpillTier(args.spill_dir, int(args.spill_gib * GIB), checkpoint_id)
+    device_counters = os_cache.DeviceCounters(args.model)
     session = Session(engine, tokenizer, head, reuse=not (args.no_reuse or args.legacy))
     sample = make_sampler(args.temperature, args.top_k, args.top_p, args.seed)
     distributions = []
@@ -328,7 +355,9 @@ def main():
             torch.cuda.reset_peak_memory_stats()
             cache = engine.moe.cache
             before = dict(disk=session.disk_bytes(), requests=cache.requests, gpu=cache.hits,
-                          host=cache.host_hits, read=cache.disk_reads)
+                          host=cache.host_hits, read=cache.disk_reads, spill=cache.spill_hits)
+            cache.ledger.step()  # start this turn's I/O window
+            physical_before = device_counters.read()
             shown, opened = 0, False
 
             def on_token(output, timing):
@@ -346,7 +375,7 @@ def main():
             started = time.perf_counter()
             try:
                 tokens, timings, reused, stopped = generate(session, ids, args.max_new_tokens, pick, on_token,
-                                                            args.profile_decode, args.verbose)
+                                                            args.profile_decode, args.verbose, args.trace_routing)
             except ValueError as error:
                 if args.prompt is not None:
                     raise
@@ -365,13 +394,42 @@ def main():
                 disk_bytes=session.disk_bytes() - before['disk'],
                 expert_requests=cache.requests - before['requests'],
                 expert_gpu_hits=cache.hits - before['gpu'], expert_host_hits=cache.host_hits - before['host'],
-                expert_disk_reads=cache.disk_reads - before['read'])
+                expert_disk_reads=cache.disk_reads - before['read'],
+                expert_spill_hits=cache.spill_hits - before['spill'])
+            # v0.7 roofline inputs. Physical bytes are device-wide (other programs on the drive count).
+            physical = os_cache.delta(physical_before, device_counters.read())
+            decode_io = [t['io'] for t in timings if t['phase'] == 'decode' and 'io' in t]
+            total = lambda name: sum(step[name] for step in decode_io)
+            summary['physical_device'] = physical
+            summary['physical_device_error'] = device_counters.error
+            summary['physical_over_logical'] = (physical['bytes_read'] / summary['disk_bytes']
+                                                if physical and summary['disk_bytes'] else None)
+            if decode_io:
+                busy, wall = total('busy_seconds'), sum(decode)
+                summary['decode_io'] = dict(
+                    steps=len(decode_io), expert_bytes_per_token=total('bytes_read') / len(decode_io),
+                    unique_bytes_per_token=total('unique_bytes') / len(decode_io),
+                    repeat_bytes_per_token=total('repeat_bytes') / len(decode_io),
+                    drive_busy_seconds_per_token=busy / len(decode_io),
+                    blocked_seconds_per_token=total('blocked_seconds') / len(decode_io),
+                    drive_utilization=busy / wall if wall else None,
+                    effective_MBps=total('bytes_read') / 1e6 / busy if busy else None,
+                    mean_queue_depth=total('depth_seconds') / busy if busy else None,
+                    overlap_fraction=(busy - total('busy_blocked_seconds')) / busy if busy else None)
             rate = f'{summary["mean_decode_seconds"]:.1f} s/token' if decode else 'no decode steps'
             print(f'[{len(tokens)} tokens, first after {first:.1f}s, then {rate}; '
                   f'{reused}/{len(ids)} prompt tokens reused; disk {summary["disk_bytes"] / 1e9:.2f} GB; experts '
                   f'{100 * summary["expert_gpu_hits"] / requests:.0f}% GPU, '
                   f'{100 * summary["expert_host_hits"] / requests:.0f}% RAM, '
                   f'{100 * summary["expert_disk_reads"] / requests:.0f}% disk]', flush=True)
+            if summary.get('decode_io'):
+                d = summary['decode_io']
+                show = lambda value, form: 'n/a' if value is None else format(value, form)
+                print(f'[decode I/O per token: {d["expert_bytes_per_token"] / 1e9:.2f} GB experts '
+                      f'({d["repeat_bytes_per_token"] / 1e9:.2f} GB re-read), drive busy '
+                      f'{show(d["drive_utilization"] and 100 * d["drive_utilization"], ".0f")}% of the time at '
+                      f'{show(d["effective_MBps"], ".0f")} MB/s, queue {show(d["mean_queue_depth"], ".1f")}, '
+                      f'physical/logical {show(summary["physical_over_logical"], ".2f")}]', flush=True)
             if args.evidence:
                 with args.evidence.open('x', encoding='utf-8') as handle:
                     json.dump(dict(prompt=prompt, prompt_text=prompt_text, prompt_token_ids=ids,

@@ -1,0 +1,35 @@
+test_failed_read_surfaces_and_leaves_cache_usable (__main__.AsyncSafetyTests) ... ok
+test_random_prefetch_discard_get_always_returns_exact_bytes (__main__.AsyncSafetyTests) ... ok
+test_host_copy_of_layer_expert_survives_admission (__main__.LayerProtectionTests) ... ok
+test_policy_protected_admission_and_replay_accounting (__main__.LayerProtectionTests) ... ok
+test_same_layer_expert_is_not_evicted_before_use (__main__.LayerProtectionTests) ... ok
+test_tier_smaller_than_a_layer_falls_back (__main__.LayerProtectionTests) ... ok
+test_busy_time_is_an_interval_union_and_depth_is_time_weighted (__main__.LedgerTests) ... ok
+test_overlap_is_drive_time_while_compute_was_not_waiting (__main__.LedgerTests) ... ok
+test_threaded_updates_balance (__main__.LedgerTests) ... ok
+test_unique_and_repeated_bytes_and_step_deltas (__main__.LedgerTests) ... ok
+test_interrupted_step_forces_rebuild (__main__.PrefixReuseTests) ... ok
+test_reuse_matches_rebuild_on_random_conversations (__main__.PrefixReuseTests) ... ok
+test_reuse_requires_a_strict_exact_prefix (__main__.PrefixReuseTests) ... ok
+test_host_tier_shrinks_when_ram_is_short_and_never_grows (__main__.RamGuardTests) ... ok
+test_coalescing_flag_changes_reads_not_bytes (__main__.ReadGroupTests) ... ok
+test_gaps_split_reads_and_mmap_mode_is_unchanged (__main__.ReadGroupTests) ... ok
+test_one_read_same_bytes (__main__.ReadGroupTests) ... ok
+test_fp4_decode_exhaustive_and_fast_path_bit_exact (__main__.ReferenceArithmeticTests) ... skipped 'PyTorch not installed: reference arithmetic checks skipped'
+test_fp8_decode_all_finite_codes_with_block_scales (__main__.ReferenceArithmeticTests) ... skipped 'PyTorch not installed: reference arithmetic checks skipped'
+test_prediction_gate_reads_only_when_measurably_right (__main__.ReferenceArithmeticTests) ... skipped 'PyTorch not installed: reference arithmetic checks skipped'
+test_rmsnorm_and_residual_mixing_match_float64 (__main__.ReferenceArithmeticTests) ... skipped 'PyTorch not installed: reference arithmetic checks skipped'
+test_routing_matches_float64_reference (__main__.ReferenceArithmeticTests) ... skipped 'PyTorch not installed: reference arithmetic checks skipped'
+test_live_ledger_step_feeds_roofline (__main__.RooflineTests) ... ok
+test_verdict_follows_measured_drive_utilisation (__main__.RooflineTests) ... ok
+test_guess_for_resident_expert_reads_nothing (__main__.SpeculativeTests) ... ok
+test_wrong_guess_is_cancelled_or_counted_and_right_guess_is_adopted (__main__.SpeculativeTests) ... ok
+test_budget_stops_admission (__main__.SpillTests) ... ok
+test_corrupt_stale_and_truncated_copies_are_ignored (__main__.SpillTests) ... ok
+test_second_session_reads_the_copy_and_bytes_are_exact (__main__.SpillTests) ... ok
+
+----------------------------------------------------------------------
+Ran 29 tests in 0.950s
+
+OK (skipped=5)
+{"status": "PASS", "tests": 29, "skipped": 5, "failures": 0, "errors": 0, "torch": "NumPy stand-in for the cache tests; ReferenceArithmeticTests skipped"}

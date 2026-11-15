@@ -19,13 +19,42 @@ Design
   same logic on recorded routing.
 
 Weights stay packed (FP4/FP8 bytes) in both tiers; decoding happens per use.
+
+v0.7 (none of it changes which expert runs or any arithmetic):
+- begin_layer(keys) protects every expert of the layer in progress in both
+  tiers. Before, loading one expert of a layer could evict another expert of
+  the same layer that had not been used yet, turning a hit into a re-read.
+  FRUSTUM_PROTECT_LAYER=0 restores the old behaviour.
+- One positioned read per expert instead of one per tensor when the tensors
+  are adjacent on disk (RangeReader.read_group). FRUSTUM_COALESCE=0 restores
+  per-tensor reads.
+- Speculative reads (next-layer guesses) are tracked separately from demand
+  reads: a guess that is not needed is cancelled if it has not started and
+  counted as waste if it has; get() adopts a guess that turned out right.
+- io_ledger.IOLedger records what the roofline needs: unique and repeated
+  bytes, drive-busy time, queue depth, blocked time and overlap.
+- Optional RAM guard: shrink the host tier when free RAM falls below a floor.
+- Optional spill tier (spill_tier.SpillTier, set cache.spill): verified exact copies of
+  experts on a faster local drive, consulted before the checkpoint drive.
 """
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+import os
 import time
 
 from cache_policy import Frequency, Tier
 from frustum_loader import RangeReader
+from io_ledger import IOLedger
+
+
+def _flag(name, default=True):
+    value = os.environ.get(name)
+    return default if value is None else value.strip().lower() not in ('0', 'false', 'off', 'no')
+
+
+class _Buffers(list):
+    """A read result that remembers which storage it came from ('disk' or 'spill')."""
+    source = 'disk'
 
 
 @dataclass
@@ -37,7 +66,8 @@ class Entry:
 class TieredExpertCache:
     def __init__(self, torch, catalog, device, gpu_bytes, host_bytes=0, *, io_threads=4,
                  gpu_policy='lfu', host_policy='lru', pinned=None, half_life=8,
-                 cap_bytes=None, headroom_bytes=0):
+                 cap_bytes=None, headroom_bytes=0, coalesce=None, protect_layer=None,
+                 ram_probe=None, ram_floor_bytes=0):
         if gpu_bytes <= 0 or host_bytes < 0 or io_threads < 0:
             raise ValueError('Invalid cache configuration')
         self.t = torch
@@ -52,9 +82,18 @@ class TieredExpertCache:
         self.host = Tier(host_bytes, host_policy)
         self.cache = {}    # key -> Entry on the compute device
         self.ram = {}      # key -> list of CPU uint8 tensors
-        self.pending = {}  # key -> Future[list[bytearray]]
+        self.pending = {}  # key -> Future[list of buffers]
+        self.speculative = set()  # keys in pending that were issued as guesses
         self.pool = ThreadPoolExecutor(io_threads, thread_name_prefix='frustum-io') if io_threads else None
         self.cap, self.headroom = cap_bytes, headroom_bytes
+        self.coalesce = _flag('FRUSTUM_COALESCE') if coalesce is None else coalesce
+        self.protect_layer = _flag('FRUSTUM_PROTECT_LAYER') if protect_layer is None else protect_layer
+        self.layer_keys = frozenset()
+        self.ledger = IOLedger()
+        self.ram_probe, self.ram_floor = ram_probe, ram_floor_bytes
+        self.host_shrinks = 0
+        self.spill = None  # optional SpillTier
+        self.spill_hits = 0
         self.requests = self.hits = self.host_hits = self.disk_reads = self.evictions = 0
         self.upload_seconds = self.wait_seconds = 0.0
         self.upload_bytes = 0
@@ -71,27 +110,107 @@ class TieredExpertCache:
     def size(self, key):
         return sum(self.catalog.tensors[name].size for name in self.plan[key])
 
-    def _read(self, key):
-        return [self.reader.read(self.catalog.tensors[name]) for name in self.plan[key]]
+    def resident(self, key):
+        """True when key can be served without the drive (either tier, or a read under way)."""
+        return key in self.cache or key in self.ram or key in self.pending
+
+    def _read(self, key, queued=False):
+        items = [self.catalog.tensors[name] for name in self.plan[key]]
+        size = 0
+        self.ledger.read_begin(queued)
+        try:
+            identity = None
+            if self.spill is not None:
+                identity = self.spill.identity(items)
+                copy = self.spill.load(key, identity)
+                if copy is not None:
+                    result = _Buffers(copy)
+                    result.source = 'spill'
+                    return result
+            if self.coalesce:
+                buffers = self.reader.read_group(items)
+            else:
+                buffers = [self.reader.read(item) for item in items]
+            # Bytes actually requested: each underlying buffer once (a coalesced read may span gaps).
+            owners = {id(getattr(b, 'obj', b)): getattr(b, 'obj', b) for b in buffers}
+            size = sum(len(owner) for owner in owners.values())
+            if self.spill is not None:
+                self.spill.store(key, buffers, identity)
+            return _Buffers(buffers)
+        finally:
+            self.ledger.read_end(size)
+
+    def _submit(self, key):
+        self.ledger.submitted()
+        return self.pool.submit(self._read, key, True)
 
     def new_pass(self):
         """Call once per pass over the layers (one prefill or one decode step)."""
         self.frequency.tick()
+        self._guard_ram()
 
-    def prefetch(self, keys):
-        """Start background reads for keys that are in neither tier. Never blocks."""
+    def begin_layer(self, keys):
+        """Declare the experts the layer in progress will use; they are not evicted until the
+        next begin_layer. Their use is counted now, so the frequency ranking already knows
+        they belong to this pass when the first of them needs room."""
+        self.layer_keys = frozenset(keys) if self.protect_layer else frozenset()
+        for key in self.layer_keys:
+            self.frequency.touch(key)
+
+    def _guard_ram(self):
+        """Give RAM back when the machine is short: the host tier only ever shrinks here."""
+        if self.ram_probe is None or not self.host.budget:
+            return
+        available = self.ram_probe()
+        if available is None or available >= self.ram_floor:
+            return
+        target = max(0, self.host.used - (self.ram_floor - available))
+        self.host.budget = min(self.host.budget, target)
+        while self.host.used > self.host.budget:
+            victim = self.host.victim(self.frequency, self.layer_keys)
+            if victim is None:
+                break
+            self.host.remove(victim)
+            del self.ram[victim]
+        self.host_shrinks += 1
+
+    def prefetch(self, keys, speculative=False):
+        """Start background reads for keys that are in neither tier. Never blocks.
+
+        speculative=True marks guesses: they are accounted separately, and a later
+        demand prefetch or get() for the same key adopts the read already under way."""
         if self.pool is None:
             return
         for key in keys:
-            if key not in self.cache and key not in self.ram and key not in self.pending:
-                self.pending[key] = self.pool.submit(self._read, key)
+            if key in self.pending:
+                if not speculative and key in self.speculative:
+                    self._adopt(key)
+                continue
+            if key not in self.cache and key not in self.ram:
+                self.pending[key] = self._submit(key)
+                if speculative:
+                    self.speculative.add(key)
+                    self.ledger.speculative('issued')
+
+    def _adopt(self, key):
+        self.speculative.discard(key)
+        self.ledger.speculative('used', self.size(key))
 
     def discard_pending(self, keep=()):
         """Forget background reads nobody collected, e.g. after an interrupted forward pass.
         Reads for keys in keep stay queued (next-layer prediction issued them early)."""
         keep = set(keep)
         for key in [key for key in self.pending if key not in keep]:
-            self.pending.pop(key).cancel()
+            future = self.pending.pop(key)
+            guess = key in self.speculative
+            self.speculative.discard(key)
+            if future.cancel():
+                self.ledger.unsubmitted()
+                if guess:
+                    self.ledger.speculative('cancelled')
+            elif guess:
+                # Already reading (or read): the drive time is spent. Record it; the bytes are dropped.
+                self.ledger.speculative('wasted', self.size(key))
 
     def _memory_ok(self, additional):
         if not self.cuda or self.cap is None:
@@ -110,7 +229,7 @@ class TieredExpertCache:
         """Keep a host copy when the host tier wants one."""
         if not self.host.budget or self.pinned(key):
             return
-        evicted = self.host.admit(key, size, self.frequency)
+        evicted = self.host.admit(key, size, self.frequency, self.layer_keys)
         if evicted is None:
             return
         for victim in evicted:
@@ -126,6 +245,7 @@ class TieredExpertCache:
         if entry is not None:
             self.hits += 1
             self.gpu.touch(key)
+            self.ledger.served(key, entry.size, 'gpu')
             return entry
         size = self.size(key)
         if size > self.gpu.budget:
@@ -134,21 +254,43 @@ class TieredExpertCache:
         if tensors is not None:
             self.host_hits += 1
             self.host.touch(key)
+            self.ledger.served(key, size, 'host')
         else:
             began = time.perf_counter()
             future = self.pending.pop(key, None)
-            buffers = self._read(key) if future is None else future.result()
+            if key in self.speculative:
+                self._adopt(key)
+            self.ledger.wait_begin()
+            try:
+                buffers = self._read(key) if future is None else future.result()
+            finally:
+                self.ledger.wait_end()
             self.wait_seconds += time.perf_counter() - began
-            self.disk_reads += 1
+            if getattr(buffers, 'source', 'disk') == 'spill':
+                self.spill_hits += 1
+                self.ledger.served(key, size, 'spill')
+            else:
+                self.disk_reads += 1
+                self.ledger.served(key, size, 'disk')
             tensors = [self.t.frombuffer(buffer, dtype=self.t.uint8) for buffer in buffers]
             self._remember(key, tensors, size)
         keep = set(protected)
         keep.add(key)
-        for victim in self.gpu.make_room(size, self.frequency, keep):
+        wide = keep | self.layer_keys
+        try:
+            victims = self.gpu.make_room(size, self.frequency, wide)
+        except RuntimeError:
+            # The tier cannot hold a whole layer at once: protect only what the caller named.
+            wide = keep
+            victims = self.gpu.make_room(size, self.frequency, keep)
+        for victim in victims:
             self._evict(victim)
         # The byte budget is a plan; the allocator is the truth. Shed more if it is tight.
         while not self._memory_ok(size):
-            victim = self.gpu.victim(self.frequency, keep)
+            victim = self.gpu.victim(self.frequency, wide)
+            if victim is None and wide is not keep:
+                wide = keep
+                victim = self.gpu.victim(self.frequency, keep)
             if victim is None:
                 raise RuntimeError('Insufficient free dedicated VRAM; stop before allocating')
             self.gpu.remove(victim)
@@ -169,7 +311,10 @@ class TieredExpertCache:
                     blocked_on_disk_seconds=self.wait_seconds,
                     upload_seconds=self.upload_seconds, upload_bytes=self.upload_bytes,
                     gpu_bytes=self.gpu.used, gpu_budget_bytes=self.gpu.budget, gpu_policy=self.gpu.policy,
-                    host_bytes=self.host.used, host_budget_bytes=self.host.budget, host_policy=self.host.policy)
+                    host_bytes=self.host.used, host_budget_bytes=self.host.budget, host_policy=self.host.policy,
+                    host_shrinks=self.host_shrinks, coalesced_reads=self.coalesce,
+                    layer_protection=self.protect_layer, io=self.ledger.snapshot(),
+                    spill_hits=self.spill_hits, spill=self.spill.stats() if self.spill is not None else None)
 
     def close(self):
         if self.pool is not None:
@@ -177,6 +322,9 @@ class TieredExpertCache:
         if self.cuda:
             self.t.cuda.synchronize(self.device)
         self.pending.clear()
+        self.speculative.clear()
         self.cache.clear()
         self.ram.clear()
+        if self.spill is not None:
+            self.spill.close()
         self.reader.close()

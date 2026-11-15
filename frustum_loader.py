@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter, OrderedDict
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import io
 import mmap
@@ -179,6 +179,46 @@ class RangeReader:
         if item.size:
             self.readinto(item, data)
         return data
+
+    def read_group(self, items, max_gap=65536):
+        """Read several tensors with as few positioned reads as possible (v0.7).
+
+        Ranges in the same file that touch, or are separated by at most max_gap
+        bytes, are fetched with one read into one buffer; each tensor is returned
+        as a writable memoryview into it, in the order given. The bytes are the
+        same bytes read() returns. Gap bytes that were read are counted in
+        bytes_read, so the counter stays an honest record of what was requested.
+        mode='mmap' keeps the one-read-per-tensor behaviour.
+        """
+        items = list(items)
+        if self.mode == 'mmap' or len(items) < 2:
+            return [self.read(item) for item in items]
+        order = sorted(range(len(items)), key=lambda i: (str(items[i].path), items[i].offset))
+        out = [None] * len(items)
+        run = []
+
+        def flush():
+            if not run:
+                return
+            first, last = items[run[0]], items[run[-1]]
+            span = replace(first, name=first.name + '..' + last.name,
+                           size=last.offset + last.size - first.offset)
+            data = self.read(span)
+            view = memoryview(data)
+            for i in run:
+                start = items[i].offset - first.offset
+                out[i] = view[start:start + items[i].size]
+            run.clear()
+
+        for i in order:
+            if run:
+                prev = items[run[-1]]
+                gap = items[i].offset - (prev.offset + prev.size)
+                if items[i].path != prev.path or not 0 <= gap <= max_gap:
+                    flush()
+            run.append(i)
+        flush()
+        return out
 
     def copy(self, item, consume):
         """Chunked callback API kept for existing callers: consume(offset, view).

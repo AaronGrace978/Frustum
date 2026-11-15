@@ -64,7 +64,7 @@ def expert_forward(x,weight,linear,limit):
 class StreamedMoE:
     def __init__(self,catalog,cache_mib=256,*,host_cache_mib=0,router_cache_mib=32,io_threads=4,
                  gpu_policy='lfu',host_policy='lru',pin_shared=False,cap_bytes=12*GIB,headroom_bytes=2*GIB,
-                 lookahead=None,predict_next=None):
+                 lookahead=None,predict_next=None,predict_mode=None,predict_threshold=0.6,predict_warmup=40):
         """cache_mib: GPU budget for packed experts. host_cache_mib: optional RAM tier behind it.
         router_cache_mib: give it the size of all router weights to stop re-reading them per token.
         pin_shared: never evict shared experts (the budget must have room for all of them).
@@ -73,6 +73,15 @@ class StreamedMoE:
         start reading that many of its likely experts early (v0.6). The real routing still decides
         which experts run, so a wrong guess costs drive time, never accuracy. 0 disables.
         Default: FRUSTUM_PREDICT_NEXT, else 0 (off until measured: wrong guesses compete with real reads).
+        predict_mode (v0.7; FRUSTUM_PREDICT_MODE): what to do with the guesses.
+          shadow  score them, never read. Costs one small matrix product per layer and no drive time.
+          gated   (default) read a source's guesses only after predict_warmup scored layers and while
+                  the measured share of its not-yet-resident guesses that were then routed stays at
+                  or above predict_threshold; otherwise behave like shadow.
+          always  read every guess, as v0.6 did.
+        Guesses come from two sources, scored separately: 'router' (next layer's router on this
+        layer's input) and 'history' (what the next layer used on the previous step). Reads are
+        issued after this layer's experts have run, so they never queue ahead of its own reads.
         """
         self.catalog=catalog
         self.cfg=catalog.config['text_config']
@@ -89,8 +98,15 @@ class StreamedMoE:
         if predict_next is None:
             predict_next=int(os.environ.get('FRUSTUM_PREDICT_NEXT','0'))
         self.predict_next=0 if io_threads==0 else max(0,predict_next)
-        self._predicted=None  # (layer, set of expert ids) guessed during the previous layer
+        self.predict_mode=(predict_mode or os.environ.get('FRUSTUM_PREDICT_MODE','gated')).strip().lower()
+        if self.predict_mode not in ('shadow','gated','always'):
+            raise ValueError('predict_mode is shadow, gated or always')
+        self.predict_threshold,self.predict_warmup=float(predict_threshold),int(predict_warmup)
+        self._predicted=None  # (layer, {source: ids}, {source: ids not resident when guessed})
+        self._history={}      # layer -> expert ids routed on the previous decode step
         self.prediction=dict(guessed=0,routed=0,routed_and_guessed=0)
+        self.sources={name:dict(layers=0,guessed=0,correct=0,cold_guessed=0,cold_correct=0,
+                                cold_precision_ema=None,reads_issued=0) for name in ('router','history')}
         decoder_test()  # tiny: proves the fast FP4 decoder is exact on this GPU before any weights are used
 
     def _group(self,layer,expert):
@@ -103,6 +119,13 @@ class StreamedMoE:
             self.cache.plan[key]=names
         return key
 
+    def _confident(self,source):
+        st=self.sources[source]
+        if self.predict_mode=='always': return True
+        if self.predict_mode=='shadow': return False
+        return (st['layers']>=self.predict_warmup and st['cold_precision_ema'] is not None
+                and st['cold_precision_ema']>=self.predict_threshold)
+
     def _predict(self,x,layer):
         nxt=f'layers.{layer+1}.ffn.gate.'
         if (not self.predict_next or x.shape[0]>2 or nxt+'weight' not in self.catalog.tensors
@@ -111,15 +134,49 @@ class StreamedMoE:
         weight=self._router_tensor(nxt+'weight'); bias=self._router_tensor(nxt+'bias')
         scores=F.softplus(F.linear(x.float(),weight.float())).sqrt()+bias
         k=min(self.predict_next,scores.shape[-1])
-        guess={int(e) for e in scores.topk(k,dim=-1).indices.flatten().tolist()}
-        self._predicted=(layer+1,guess)
-        self.prediction['guessed']+=len(guess)
-        self.cache.prefetch([self._group(layer+1,e) for e in sorted(guess)])
+        guesses={'router':{int(e) for e in scores.topk(k,dim=-1).indices.flatten().tolist()},
+                 'history':set(self._history.get(layer+1,()))}
+        cold={name:{e for e in ids if not self.cache.resident(self._group(layer+1,e))}
+              for name,ids in guesses.items()}
+        self._predicted=(layer+1,guesses,cold)
+        self.prediction['guessed']+=len(guesses['router'])
+        issue=[]
+        for name in ('history','router'):
+            if self._confident(name):
+                fresh=sorted(cold[name]-set(issue))
+                self.sources[name]['reads_issued']+=len(fresh)
+                issue+=fresh
+        if issue:
+            self.cache.prefetch([self._group(layer+1,e) for e in issue],speculative=True)
+
+    def _score(self,layer,routed):
+        """Compare the guesses made for this layer with what its router really chose."""
+        if self._predicted is not None and self._predicted[0]==layer:
+            _,guesses,cold=self._predicted
+            self.prediction['routed']+=len(routed)
+            self.prediction['routed_and_guessed']+=len(routed&guesses['router'])
+            for name,ids in guesses.items():
+                st=self.sources[name]
+                st['layers']+=1; st['guessed']+=len(ids); st['correct']+=len(ids&routed)
+                st['cold_guessed']+=len(cold[name]); st['cold_correct']+=len(cold[name]&routed)
+                if cold[name]:
+                    p=len(cold[name]&routed)/len(cold[name])
+                    ema=st['cold_precision_ema']
+                    st['cold_precision_ema']=p if ema is None else 0.9*ema+0.1*p
+        self._predicted=None
+        if self.predict_next:
+            self._history[layer]=set(routed)
 
     def prediction_stats(self):
         p=self.prediction
+        sources={}
+        for name,st in self.sources.items():
+            sources[name]=dict(st,precision=st['correct']/st['guessed'] if st['guessed'] else None,
+                cold_precision=st['cold_correct']/st['cold_guessed'] if st['cold_guessed'] else None,
+                reading_now=self._confident(name))
         return dict(p,recall=p['routed_and_guessed']/p['routed'] if p['routed'] else None,
-                    experts_guessed_per_layer=self.predict_next)
+                    experts_guessed_per_layer=self.predict_next,mode=self.predict_mode,
+                    threshold=self.predict_threshold,warmup_layers=self.predict_warmup,sources=sources)
 
     def _router_tensor(self,name):
         item=self.catalog.tensors[name]
@@ -181,15 +238,11 @@ class StreamedMoE:
         if self._last_layer is None or layer<=self._last_layer:
             self.cache.new_pass()
         self._last_layer=layer
+        # v0.7: nothing this layer needs may be evicted while the layer runs.
+        self.cache.begin_layer(keys)
         self.cache.discard_pending(keep=keys)
-        routed={int(e) for e in ids_cpu.flatten().tolist()}
-        if self._predicted is not None and self._predicted[0]==layer:
-            self.prediction['routed']+=len(routed)
-            self.prediction['routed_and_guessed']+=len(routed&self._predicted[1])
-        self._predicted=None
-        # Queue this layer's reads first, then the guesses for the next layer behind them.
+        self._score(layer,{int(e) for e in ids_cpu.flatten().tolist()})
         self.cache.prefetch(keys[:1+self.lookahead])
-        self._predict(x,layer)
         y=torch.zeros_like(x,dtype=torch.float32)
         yr=torch.zeros_like(x_cpu,dtype=torch.float32)
         for pos,key in enumerate(keys):
@@ -212,6 +265,9 @@ class StreamedMoE:
                     lambda z,w:self._linear(entry,key,z,w,True),cfg['swiglu_limit'])
                 yr.index_add_(0,rows,ref.float())
             del part
+        # v0.7: guesses for the next layer go out only now, when this layer's own reads are done,
+        # so a guess can never delay an expert the router has actually selected.
+        self._predict(x,layer)
         result=y.to(torch.bfloat16)
         if not torch.isfinite(result).all(): raise AssertionError('Nonfinite MoE output')
         metrics={}

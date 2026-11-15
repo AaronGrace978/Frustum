@@ -1,0 +1,42 @@
+Replay of the routing recorded in decode_profile_results.json (v0.4 run, prompt "Say hello.", 2 decode steps).
+Run in the development sandbox without the checkpoint: every routed expert is taken as 18,800,640 bytes
+(whitepaper section 1); shared experts are left out (they are pinned). This is a cache simulation, not a timing.
+decode steps: 2  routed requests per step: [240, 240]
+share of step-2 experts also used in step 1: 0.496
+gpu_MiB host_GiB policy layer_protection | step2: gpu_hits host_hits disk_reads disk_GB first_time_GB reread_GB
+   256    0 lru False |   0   0 240  4.51  2.27  2.24
+   256    0 lru True  |   0   0 240  4.51  2.27  2.24
+   256    0 lfu False |   3   0 237  4.46  2.27  2.18
+   256    0 lfu True  |   3   0 237  4.46  2.27  2.18
+   256    8 lru False |   0 119 121  2.27  2.27  0.00
+   256    8 lru True  |   0 119 121  2.27  2.27  0.00
+   256    8 lfu False |   3 116 121  2.27  2.27  0.00
+   256    8 lfu True  |   3 116 121  2.27  2.27  0.00
+   256   16 lru False |   0 119 121  2.27  2.27  0.00
+   256   16 lru True  |   0 119 121  2.27  2.27  0.00
+   256   16 lfu False |   3 116 121  2.27  2.27  0.00
+   256   16 lfu True  |   3 116 121  2.27  2.27  0.00
+  2048    0 lru False |   0   0 240  4.51  2.27  2.24
+  2048    0 lru True  |   0   0 240  4.51  2.27  2.24
+  2048    0 lfu False |  43   0 197  3.70  2.27  1.43
+  2048    0 lfu True  |  43   0 197  3.70  2.27  1.43
+  2048    8 lru False |   0 119 121  2.27  2.27  0.00
+  2048    8 lru True  |   0 119 121  2.27  2.27  0.00
+  2048    8 lfu False |  43  76 121  2.27  2.27  0.00
+  2048    8 lfu True  |  43  76 121  2.27  2.27  0.00
+  2048   16 lru False |   0 119 121  2.27  2.27  0.00
+  2048   16 lru True  |   0 119 121  2.27  2.27  0.00
+  2048   16 lfu False |  43  76 121  2.27  2.27  0.00
+  2048   16 lfu True  |  43  76 121  2.27  2.27  0.00
+  6144    0 lru False | 119   0 121  2.27  2.27  0.00
+  6144    0 lru True  | 119   0 121  2.27  2.27  0.00
+  6144    0 lfu False | 115   0 125  2.35  2.27  0.08
+  6144    0 lfu True  | 115   0 125  2.35  2.27  0.08
+  6144    8 lru False | 119   0 121  2.27  2.27  0.00
+  6144    8 lru True  | 119   0 121  2.27  2.27  0.00
+  6144    8 lfu False | 115   4 121  2.27  2.27  0.00
+  6144    8 lfu True  | 115   4 121  2.27  2.27  0.00
+  6144   16 lru False | 119   0 121  2.27  2.27  0.00
+  6144   16 lru True  | 119   0 121  2.27  2.27  0.00
+  6144   16 lfu False | 115   4 121  2.27  2.27  0.00
+  6144   16 lfu True  | 115   4 121  2.27  2.27  0.00

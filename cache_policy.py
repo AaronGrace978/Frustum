@@ -124,17 +124,18 @@ class Tier:
             evicted.append(key)
         return evicted
 
-    def admit(self, key, size, frequency):
+    def admit(self, key, size, frequency, protected=()):
         """Decide whether an optional copy of `key` is worth keeping here.
 
         Returns the list of keys to evict (possibly empty) when admitted, or
-        None when the newcomer ranks below what it would displace.
+        None when the newcomer ranks below what it would displace. Keys in
+        `protected` are never displaced (v0.7: the rest of the layer in progress).
         """
         if size > self.budget or key in self.order:
             return None
         evicted, freed = [], 0
         rank = frequency.rank(key)
-        skip = set()
+        skip = set(protected)
         while self.used - freed + size > self.budget:
             victim = self.victim(frequency, skip)
             if victim is None:
@@ -150,7 +151,7 @@ class Tier:
 
 
 def simulate(steps, sizes, gpu_bytes, host_bytes=0, policy='lfu', half_life=8, pinned=None,
-             host_policy='lru'):
+             host_policy='lru', group=None):
     """Replay recorded requests through a GPU tier and an optional host tier.
 
     steps: list of decode steps, each an ordered list of keys.
@@ -159,16 +160,30 @@ def simulate(steps, sizes, gpu_bytes, host_bytes=0, policy='lfu', half_life=8, p
     Returns one record per step with gpu hits, host hits and bytes read from
     disk. The host tier keeps a copy of whatever it admits, GPU-resident or
     not, matching TieredExpertCache.
+    group: optional key -> layer id. When given, the replay protects every key
+    of the layer in progress from eviction, as TieredExpertCache.begin_layer
+    does (v0.7); without it only the key being loaded is protected (v0.6).
+    Each record also splits disk bytes into first-time and repeated reads.
     """
+    seen = set()
     frequency = Frequency(half_life)
     gpu = Tier(gpu_bytes, policy, pinned)
     host = Tier(host_bytes, host_policy)
     results = []
     for step in steps:
         frequency.tick()
-        record = dict(requests=len(step), gpu_hits=0, host_hits=0, disk_reads=0, disk_bytes=0)
+        record = dict(requests=len(step), gpu_hits=0, host_hits=0, disk_reads=0, disk_bytes=0,
+                      unique_disk_bytes=0, repeat_disk_bytes=0)
+        layers = {}
+        if group is not None:
+            for key in step:
+                layers.setdefault(group(key), set()).add(key)
         for key in step:
             size = sizes[key]
+            keep = layers[group(key)] if group is not None else (key,)
+            if group is not None:
+                for member in keep:
+                    frequency.touch(member)
             if size > gpu.budget:
                 raise ValueError('An expert exceeds the GPU tier budget')
             frequency.touch(key)
@@ -182,9 +197,15 @@ def simulate(steps, sizes, gpu_bytes, host_bytes=0, policy='lfu', half_life=8, p
             else:
                 record['disk_reads'] += 1
                 record['disk_bytes'] += size
-                if host.budget and not gpu.pinned(key) and host.admit(key, size, frequency) is not None:
+                record['repeat_disk_bytes' if key in seen else 'unique_disk_bytes'] += size
+                seen.add(key)
+                if host.budget and not gpu.pinned(key) and host.admit(
+                        key, size, frequency, keep if group is not None else ()) is not None:
                     host.add(key, size)
-            gpu.make_room(size, frequency, (key,))
+            try:
+                gpu.make_room(size, frequency, keep)
+            except RuntimeError:
+                gpu.make_room(size, frequency, (key,))  # tier smaller than one layer: v0.6 behaviour
             gpu.add(key, size)
         results.append(record)
     return results

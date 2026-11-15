@@ -1,0 +1,111 @@
+test_contents_and_tiers (__main__.ExpertCacheTests) ... ERROR
+test_discard_pending (__main__.ExpertCacheTests) ... ERROR
+test_discard_pending_keeps_needed_reads (__main__.ExpertCacheTests) ... ERROR
+test_oversized_and_protected (__main__.ExpertCacheTests) ... ERROR
+test_pinned_shared_stays (__main__.ExpertCacheTests) ... ERROR
+test_without_threads_or_host_tier (__main__.ExpertCacheTests) ... ERROR
+test_cpu_tensors_and_switch (__main__.FusedFallbackTests) ... ERROR
+test_eos_and_reuse (__main__.GenerationTests) ... ok
+test_failure_invalidates_state (__main__.GenerationTests) ... ok
+test_mismatch_and_disabled_reuse_rebuild (__main__.GenerationTests) ... ok
+test_prefill_then_decode (__main__.GenerationTests) ... ok
+test_explicit_requests (__main__.PlacementTests) ... ok
+test_sixteen_gib_card (__main__.PlacementTests) ... ok
+test_small_card_falls_back (__main__.PlacementTests) ... ok
+test_admission (__main__.PolicyTests) ... ok
+test_frequency_rank_orders_by_decayed_count (__main__.PolicyTests) ... ok
+test_lru_and_lfu_victims (__main__.PolicyTests) ... ok
+test_pinned_and_exhaustion (__main__.PolicyTests) ... ok
+test_small_tier_cyclic_access (__main__.PolicyTests) ... ok
+test_cache_and_leases (frustum_loader.PrototypeTests) ... ERROR
+test_header_only (frustum_loader.PrototypeTests) ... ok
+test_oversized_rejected_before_read (frustum_loader.PrototypeTests) ... ERROR
+test_path_escape (frustum_loader.PrototypeTests) ... ok
+test_positioned_reads (frustum_loader.PrototypeTests) ... ok
+test_threaded_reads_and_handle_cap (frustum_loader.PrototypeTests) ... ok
+test_truncated_file (frustum_loader.PrototypeTests) ... ok
+test_truncated_payload_detected_on_read (frustum_loader.PrototypeTests) ... ok
+test_unaligned_chunk_copy (frustum_loader.PrototypeTests) ... ok
+test_fixed_strings (__main__.TemplateTests) ... ok
+test_matches_official_encoder (__main__.TemplateTests) ... skipped 'Official encoding/encoding.py not found next to the checkpoint'
+
+======================================================================
+ERROR: test_contents_and_tiers (__main__.ExpertCacheTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/sessions/rcw-01guvuqkw9boqzsdrtdcaknl/mnt/Frustum_loader/selftest.py", line 117, in setUp
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+======================================================================
+ERROR: test_discard_pending (__main__.ExpertCacheTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/sessions/rcw-01guvuqkw9boqzsdrtdcaknl/mnt/Frustum_loader/selftest.py", line 117, in setUp
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+======================================================================
+ERROR: test_discard_pending_keeps_needed_reads (__main__.ExpertCacheTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/sessions/rcw-01guvuqkw9boqzsdrtdcaknl/mnt/Frustum_loader/selftest.py", line 117, in setUp
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+======================================================================
+ERROR: test_oversized_and_protected (__main__.ExpertCacheTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/sessions/rcw-01guvuqkw9boqzsdrtdcaknl/mnt/Frustum_loader/selftest.py", line 117, in setUp
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+======================================================================
+ERROR: test_pinned_shared_stays (__main__.ExpertCacheTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/sessions/rcw-01guvuqkw9boqzsdrtdcaknl/mnt/Frustum_loader/selftest.py", line 117, in setUp
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+======================================================================
+ERROR: test_without_threads_or_host_tier (__main__.ExpertCacheTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/sessions/rcw-01guvuqkw9boqzsdrtdcaknl/mnt/Frustum_loader/selftest.py", line 117, in setUp
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+======================================================================
+ERROR: test_cpu_tensors_and_switch (__main__.FusedFallbackTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/sessions/rcw-01guvuqkw9boqzsdrtdcaknl/mnt/Frustum_loader/selftest.py", line 220, in test_cpu_tensors_and_switch
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+======================================================================
+ERROR: test_cache_and_leases (frustum_loader.PrototypeTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/sessions/rcw-01guvuqkw9boqzsdrtdcaknl/mnt/Frustum_loader/frustum_loader.py", line 400, in test_cache_and_leases
+    loader = FrustumLoader(self.catalog,budget_bytes=32,chunk_bytes=3)
+  File "/sessions/rcw-01guvuqkw9boqzsdrtdcaknl/mnt/Frustum_loader/frustum_loader.py", line 266, in __init__
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+======================================================================
+ERROR: test_oversized_rejected_before_read (frustum_loader.PrototypeTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/sessions/rcw-01guvuqkw9boqzsdrtdcaknl/mnt/Frustum_loader/frustum_loader.py", line 414, in test_oversized_rejected_before_read
+    loader = FrustumLoader(self.catalog,budget_bytes=8,chunk_bytes=3)
+  File "/sessions/rcw-01guvuqkw9boqzsdrtdcaknl/mnt/Frustum_loader/frustum_loader.py", line 266, in __init__
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+----------------------------------------------------------------------
+Ran 30 tests in 0.195s
+
+FAILED (errors=9, skipped=1)
