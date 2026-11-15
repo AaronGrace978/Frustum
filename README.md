@@ -4,6 +4,8 @@ Streaming inference for checkpoints far larger than GPU memory. The reference ta
 
 Current code: v0.5.1. Live benchmarks from a first test session are below. The numbers under "History and recorded evidence" were measured with v0.4. Run the verification step below to get current numbers for your machine.
 
+**Whitepaper:** [`whitepaper/Frustum_loader_Whitepaper_v0.5.1.pdf`](whitepaper/Frustum_loader_Whitepaper_v0.5.1.pdf) (full technical write-up, v0.5.1 live benchmarks, evidence JSONs embedded). Rebuild with `python whitepaper/build_whitepaper.py`. Earlier editions are in `whitepaper/archive/`.
+
 ## Quick start
 
     .\run_verify.ps1                      # tests, drive speed, v0.4 parity, timed chat
