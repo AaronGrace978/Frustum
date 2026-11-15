@@ -19,6 +19,7 @@ import torch.nn.functional as F
 from block_primitives import hc_mixes, hc_post, hc_pre, rms_norm
 from expert_correctness import activation
 from frustum_loader import Catalog, FrustumLoader, default_model_root
+import fused_kernels
 from layer0_block import RingKV
 from reproducibility import cache_sha256, tensor_sha256
 from sparse_rows import SparseRows
@@ -134,6 +135,7 @@ class DenseOps:
     def __init__(self, catalog, cache_mib):
         self.catalog, self.cfg = catalog, catalog.config['text_config']
         self.loader = FrustumLoader(catalog, 'cuda', cache_mib * MIB)
+        self.scales_ok = set()
 
     def tensor(self, name):
         item = self.catalog.tensors[name]
@@ -143,34 +145,55 @@ class DenseOps:
         with self.loader.acquire(name) as raw:
             return raw.view(dtypes[item.dtype]).reshape(item.shape).clone()
 
-    def matrix(self, name):
+    def _fp8_formats(self, name):
         weight = self.catalog.tensors[name + '.weight']
-        if weight.dtype in ('BF16', 'F32'):
-            return self.tensor(name + '.weight')
         if weight.dtype != 'F8_E4M3':
             raise ValueError(f'Unsupported dense weight format {weight.dtype} for {name}')
         scales = self.catalog.tensors[name + '.scale']
         if scales.dtype != 'F8_E8M0':
             raise ValueError(f'Unsupported dense scale format for {name}')
+        return weight, scales
+
+    @staticmethod
+    def _decode_fp8(raw, scale_raw, weight, scales, name):
+        value = raw.view(torch.float8_e4m3fn).reshape(weight.shape).float()
+        scale = scale_raw.reshape(scales.shape)
+        if bool((scale == 255).any()):
+            raise ValueError(f'NaN E8M0 scale in {name}')
+        factor = torch.exp2(scale.float() - 127)
+        rows, cols = weight.shape
+        if rows % 32 == 0 and cols % 32 == 0 and tuple(scales.shape) == (rows // 32, cols // 32):
+            # Same element-by-element products as the expanded form below, without
+            # materialising two more full-size FP32 copies of the matrix.
+            value.view(rows // 32, 32, cols // 32, 32).mul_(factor[:, None, :, None])
+            return value
+        return value * factor.repeat_interleave(32, 0).repeat_interleave(32, 1)[:rows, :cols]
+
+    def matrix(self, name):
+        weight = self.catalog.tensors[name + '.weight']
+        if weight.dtype in ('BF16', 'F32'):
+            return self.tensor(name + '.weight')
+        weight, scales = self._fp8_formats(name)
         with self.loader.acquire(name + '.weight') as raw, self.loader.acquire(name + '.scale') as scale_raw:
-            value = raw.view(torch.float8_e4m3fn).reshape(weight.shape).float()
-            scale = scale_raw.reshape(scales.shape)
-            if bool((scale == 255).any()):
-                raise ValueError(f'NaN E8M0 scale in {name}')
-            factor = torch.exp2(scale.float() - 127)
-            rows, cols = weight.shape
-            if rows % 32 == 0 and cols % 32 == 0 and tuple(scales.shape) == (rows // 32, cols // 32):
-                # Same element-by-element products as the expanded form below, without
-                # materialising two more full-size FP32 copies of the matrix.
-                value.view(rows // 32, 32, cols // 32, 32).mul_(factor[:, None, :, None])
-                return value
-            return value * factor.repeat_interleave(32, 0).repeat_interleave(32, 1)[:rows, :cols]
+            return self._decode_fp8(raw, scale_raw, weight, scales, name)
 
     def linear(self, x, name):
-        weight = self.matrix(name)
-        if self.catalog.tensors[name + '.weight'].dtype == 'F8_E4M3':
-            x = activation(x.reshape(-1, x.shape[-1])).reshape(x.shape)
-        return F.linear(x.float(), weight.float()).to(torch.bfloat16)
+        if self.catalog.tensors[name + '.weight'].dtype != 'F8_E4M3':
+            return F.linear(x.float(), self.matrix(name).float()).to(torch.bfloat16)
+        x = activation(x.reshape(-1, x.shape[-1])).reshape(x.shape)
+        weight, scales = self._fp8_formats(name)
+        with self.loader.acquire(name + '.weight') as raw, self.loader.acquire(name + '.scale') as scale_raw:
+            def reference():
+                return F.linear(x.float(), self._decode_fp8(raw, scale_raw, weight, scales, name).float()).to(torch.bfloat16)
+            fused = fused_kernels.get(torch)
+            if not fused.enabled or x.reshape(-1, x.shape[-1]).shape[0] > fused_kernels.MAX_TOKENS:
+                return reference()
+            if name not in self.scales_ok:  # E8M0 255 is NaN; the reference rejects it on every call
+                if bool((scale_raw == 255).any()):
+                    raise ValueError(f'NaN E8M0 scale in {name}')
+                self.scales_ok.add(name)
+            return fused.block(x, raw.reshape(weight.shape), scale_raw.reshape(scales.shape), False, reference,
+                               torch.bfloat16)
 
     def float_linear(self, x, name):
         """Compressor projection promoted to FP32 before learned pooling.

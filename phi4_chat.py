@@ -10,6 +10,7 @@ from tokenizers import Tokenizer
 import torch
 import torch.nn.functional as F
 
+import fused_kernels
 from frustum_loader import RangeReader, TensorRange
 
 GIB = 1024**3
@@ -80,8 +81,12 @@ class Phi4:
 
     def linear(self, x, name):
         weight, kind = self.weights[name + '.weight']
-        return torch.cat([F.linear(x, unpack(chunk, kind).to(x.dtype))
-                          for chunk in weight.split(2048)], dim=-1)
+
+        def reference():
+            return torch.cat([F.linear(x, unpack(chunk, kind).to(x.dtype))
+                              for chunk in weight.split(2048)], dim=-1)
+        # Decode steps: fused kernel reads the packed rows once (v0.6). Prefill: reference path.
+        return fused_kernels.get(torch).gguf(x, weight, kind, reference)
 
     def norm(self, x, name):
         scale = self.weights[name + '.weight'][0]

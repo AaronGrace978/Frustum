@@ -12,6 +12,8 @@ import torch
 import torch.nn.functional as F
 from frustum_loader import Catalog, FrustumLoader, default_model_root
 from expert_cache import TieredExpertCache
+import fused_kernels
+import os
 
 GIB = 1024**3
 MIB = 1024**2
@@ -62,11 +64,15 @@ def expert_forward(x,weight,linear,limit):
 class StreamedMoE:
     def __init__(self,catalog,cache_mib=256,*,host_cache_mib=0,router_cache_mib=32,io_threads=4,
                  gpu_policy='lfu',host_policy='lru',pin_shared=False,cap_bytes=12*GIB,headroom_bytes=2*GIB,
-                 lookahead=None):
+                 lookahead=None,predict_next=None):
         """cache_mib: GPU budget for packed experts. host_cache_mib: optional RAM tier behind it.
         router_cache_mib: give it the size of all router weights to stop re-reading them per token.
         pin_shared: never evict shared experts (the budget must have room for all of them).
         io_threads=0 restores strictly sequential reads.
+        predict_next: during a decode step, run the next layer's router on this layer's input and
+        start reading that many of its likely experts early (v0.6). The real routing still decides
+        which experts run, so a wrong guess costs drive time, never accuracy. 0 disables.
+        Default: FRUSTUM_PREDICT_NEXT, else the model's experts per token.
         """
         self.catalog=catalog
         self.cfg=catalog.config['text_config']
@@ -80,6 +86,11 @@ class StreamedMoE:
         # How many upcoming experts to read in the background while the GPU works.
         self.lookahead=max(1,2*io_threads) if lookahead is None else lookahead
         self._last_layer=None
+        if predict_next is None:
+            predict_next=int(os.environ.get('FRUSTUM_PREDICT_NEXT',self.cfg['num_experts_per_tok']))
+        self.predict_next=0 if io_threads==0 else max(0,predict_next)
+        self._predicted=None  # (layer, set of expert ids) guessed during the previous layer
+        self.prediction=dict(guessed=0,routed=0,routed_and_guessed=0)
         decoder_test()  # tiny: proves the fast FP4 decoder is exact on this GPU before any weights are used
 
     def _group(self,layer,expert):
@@ -92,13 +103,31 @@ class StreamedMoE:
             self.cache.plan[key]=names
         return key
 
+    def _predict(self,x,layer):
+        nxt=f'layers.{layer+1}.ffn.gate.'
+        if (not self.predict_next or x.shape[0]>2 or nxt+'weight' not in self.catalog.tensors
+                or nxt+'bias' not in self.catalog.tensors):
+            return
+        weight=self._router_tensor(nxt+'weight'); bias=self._router_tensor(nxt+'bias')
+        scores=F.softplus(F.linear(x.float(),weight.float())).sqrt()+bias
+        k=min(self.predict_next,scores.shape[-1])
+        guess={int(e) for e in scores.topk(k,dim=-1).indices.flatten().tolist()}
+        self._predicted=(layer+1,guess)
+        self.prediction['guessed']+=len(guess)
+        self.cache.prefetch([self._group(layer+1,e) for e in sorted(guess)])
+
+    def prediction_stats(self):
+        p=self.prediction
+        return dict(p,recall=p['routed_and_guessed']/p['routed'] if p['routed'] else None,
+                    experts_guessed_per_layer=self.predict_next)
+
     def _router_tensor(self,name):
         item=self.catalog.tensors[name]
         dtype={'BF16':torch.bfloat16,'F32':torch.float32}[item.dtype]
         with self.router.acquire(name) as raw:
             return raw.view(dtype).reshape(item.shape).clone()
 
-    def _linear(self,entry,key,x,w,reference=False):
+    def _linear(self,entry,key,x,w,reference=False,decoded=False):
         i=('w1','w2','w3').index(w)*2
         wi=self.catalog.tensors[self.cache.plan[key][i]]
         si=self.catalog.tensors[self.cache.plan[key][i+1]]
@@ -110,6 +139,16 @@ class StreamedMoE:
             elif wi.dtype=='F8_E4M3': matrix=fp8_decode_cpu(raw.cpu().numpy(),scale.cpu().numpy())
             else: raise ValueError('Unsupported matrix format')
             return torch.from_numpy(activation(x).double().numpy()@matrix.T).to(torch.bfloat16)
+        fused=fused_kernels.get(torch)
+        if not decoded and fused.enabled and wi.dtype in ('I8','F8_E4M3') and x.shape[0]<=fused_kernels.MAX_TOKENS:
+            checked=getattr(entry,'scales_ok',None)
+            if checked is None: checked=entry.scales_ok=set()
+            if i not in checked:  # E8M0 255 is NaN; the reference rejects it on every call
+                if bool((scale==255).any()): raise ValueError('NaN scale')
+                checked.add(i)
+            xa=activation(x)
+            return fused.block(xa,raw,scale,wi.dtype=='I8',
+                               lambda:self._linear(entry,key,x,w,decoded=True),torch.bfloat16)
         if wi.dtype=='I8': matrix=gpu_decode(raw,scale)
         elif wi.dtype=='F8_E4M3':
             if bool((scale==255).any()): raise ValueError('NaN scale')
@@ -142,7 +181,15 @@ class StreamedMoE:
         if self._last_layer is None or layer<=self._last_layer:
             self.cache.new_pass()
         self._last_layer=layer
-        self.cache.discard_pending()
+        self.cache.discard_pending(keep=keys)
+        routed={int(e) for e in ids_cpu.flatten().tolist()}
+        if self._predicted is not None and self._predicted[0]==layer:
+            self.prediction['routed']+=len(routed)
+            self.prediction['routed_and_guessed']+=len(routed&self._predicted[1])
+        self._predicted=None
+        # Queue this layer's reads first, then the guesses for the next layer behind them.
+        self.cache.prefetch(keys[:1+self.lookahead])
+        self._predict(x,layer)
         y=torch.zeros_like(x,dtype=torch.float32)
         yr=torch.zeros_like(x_cpu,dtype=torch.float32)
         for pos,key in enumerate(keys):

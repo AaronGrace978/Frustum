@@ -200,6 +200,44 @@ class ExpertCacheTests(unittest.TestCase):
         self.assertFalse(cache.pending)
         self.assertEqual(len(self.content(cache.get(keys[5]))), 6)
 
+    def test_discard_pending_keeps_needed_reads(self):
+        # Next-layer prediction queues reads early; the ones the layer really needs survive.
+        cache = self.make(gpu_keys=2, io_threads=1)
+        keys = [self.key(cache, 1, e) for e in range(4)]
+        cache.prefetch(keys)
+        cache.discard_pending(keep=keys[:2])
+        self.assertEqual(set(cache.pending), set(keys[:2]))
+        truth = self.expected(cache, keys[0])
+        self.assertEqual(self.content(cache.get(keys[0])), truth)
+        self.assertNotIn(keys[0], cache.pending)
+
+
+class FusedFallbackTests(unittest.TestCase):
+    """No GPU here: the fused path must hand every call to the reference unchanged."""
+
+    def test_cpu_tensors_and_switch(self):
+        import os
+        import torch
+        import fused_kernels
+        fused = fused_kernels.Fused(torch)
+        x = torch.ones(1, 256)
+        raw = torch.zeros(4, 144, dtype=torch.uint8)
+        marker = torch.full((1, 4), 7.0)
+        self.assertIs(fused.gguf(x, raw, 'Q4_K', lambda: marker), marker)
+        self.assertIs(fused.block(x, raw, raw, True, lambda: marker, torch.bfloat16), marker)
+        self.assertIsNone(fused.compiled)  # nothing compiled for CPU tensors
+        previous = os.environ.get('FRUSTUM_FUSED')
+        os.environ['FRUSTUM_FUSED'] = '0'
+        try:
+            self.assertFalse(fused_kernels.Fused(torch).enabled)
+        finally:
+            if previous is None:
+                os.environ.pop('FRUSTUM_FUSED')
+            else:
+                os.environ['FRUSTUM_FUSED'] = previous
+        many = torch.ones(fused_kernels.MAX_TOKENS + 1, 256)
+        self.assertIs(fused.gguf(many, raw, 'Q4_K', lambda: marker), marker)
+
 
 class GenerationTests(unittest.TestCase):
     """A toy engine whose 'logits' are just the tokens it has been fed."""

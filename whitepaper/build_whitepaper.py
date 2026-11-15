@@ -1,4 +1,4 @@
-"""Build Frustum_loader_Whitepaper_v0.5.1.pdf from this script and whitepaper/assets.
+"""Build Frustum_loader_Whitepaper_v0.6.0.pdf from this script and whitepaper/assets.
 
 Run from the repo root:  python whitepaper/build_whitepaper.py
 Needs reportlab and pypdf. Evidence JSONs in the repo root are embedded as attachments.
@@ -18,8 +18,8 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph, Prefo
 ROOT = Path(__file__).resolve().parent.parent
 WP = ROOT / 'whitepaper'
 A = WP / 'assets'
-OUT = WP / 'Frustum_loader_Whitepaper_v0.5.1.pdf'
-VERSION = 'Version 0.5.1 | November 14, 2026'
+OUT = WP / 'Frustum_loader_Whitepaper_v0.6.0.pdf'
+VERSION = 'Version 0.6.0 | November 14, 2026'
 
 FONT_DIRS = [Path('/usr/share/fonts/truetype/dejavu'), Path('C:/Windows/Fonts')]
 
@@ -138,7 +138,8 @@ def story():
             'Samsung T7 USB SSD, from a desktop chat app (ActivatePrime). The largest, DeepSeek V4.1 Flash, is a '
             'roughly 510 GB checkpoint with 40 layers and 384 routed experts per layer. Version 0.3.8 produced its '
             'first six tokens in 1,118 s. Version 0.5.1, with the drive on a USB 3.x link, produces about one token '
-            'every 8 s.'),
+            'every 8 s. Version 0.6 adds fused decode kernels for all three backends and next-layer expert '
+            'prediction for DeepSeek (Section 15); their GPU measurements are pending.'),
           table([
               ['Checkpoint', 'Live result in ActivatePrime (v0.5.1, T7 on USB-C)'],
               ['DeepSeek V4.1 Flash (~510 GB)', '24 tokens in 192.2 s on the first turn (~8.0 s/token); 24 tokens in 227.1 s on the second turn (~9.5 s/token)'],
@@ -165,9 +166,10 @@ def story():
               ['12', 'GLM-4.7-Flash on Frustum_loader'],
               ['13', 'GLM placement and warm chat'],
               ['14', 'v0.5.1 live benchmarks in ActivatePrime'],
-              ['15', 'Interpretation and limitations'],
-              ['16', 'Reproduction and integration'],
-              ['17', 'Contributors and references'],
+              ['15', 'v0.6: fused decode kernels and next-layer prediction'],
+              ['16', 'Interpretation and limitations'],
+              ['17', 'Reproduction and integration'],
+              ['18', 'Contributors and references'],
               ['A', 'Run evidence (embedded attachments)'],
           ], widths=(0.8 * inch, 5.9 * inch)),
           picture(A / 'deepseek_progress.png', 5.0 * inch,
@@ -502,7 +504,56 @@ def story():
           PageBreak()]
 
     # ---------------------------------------------------------------- 15
-    s += [H1('15. Interpretation and limitations'),
+    s += [H1('15. v0.6: fused decode kernels and next-layer prediction'),
+          P('With the drive on a USB 3.x link, a large share of each token moved onto the GPU, and most of that '
+            'work was not arithmetic. Every backend decoded each packed weight matrix into a full FP32 copy on every '
+            'token, then multiplied a single row of activations by it. For a decode step that means writing and '
+            're-reading several bytes per weight to use half a byte of packed data. Phi-4 shows it most clearly: '
+            'its weights are fully resident, so its 1.4 to 1.5 s per token does not come from the drive.'),
+          H2('Fused decode kernels'),
+          P('For inputs of up to eight activation rows, one CUDA kernel reads the packed rows once, decodes them in '
+            'registers and accumulates the dot products; one warp computes one output row and a warp shuffle '
+            'finishes the sum. No decoded copy of the matrix is written. The source is compiled when the model '
+            'loads, using NVRTC from the PyTorch CUDA wheel, and launched through the CUDA driver on PyTorch’s '
+            'current stream, so nothing new is installed. Prefill keeps the reference path, where cuBLAS is the '
+            'better tool.'),
+          table([
+              ['Format', 'Used by', 'Packed bytes per weight'],
+              ['GGUF Q4_K / Q5_K / Q6_K / Q8_0', 'Phi-4, GLM-4.7-Flash', '0.56 / 0.69 / 0.82 / 1.06'],
+              ['FP8 E4M3, E8M0 per 32×32 block', 'DeepSeek dense and shared experts', '≈1.0'],
+              ['FP4 E2M1 packed, E8M0 per 32 columns', 'DeepSeek routed experts', '0.53'],
+          ], widths=(2.5 * inch, 2.4 * inch, 1.8 * inch)),
+          H2('Same numbers, different summation order'),
+          P('Each weight is decoded with the same operations, in the same order, as the PyTorch reference '
+            'decoders, with fused multiply-add disabled, and rounded to FP16 wherever the reference rounds. Decoded '
+            'values are therefore bit-identical; only the order of the final summation differs from cuBLAS. At run '
+            'time the first call for every matrix shape is also computed on the reference path and compared; any '
+            'mismatch, compile failure or launch error switches the fused path off for the process and the reference '
+            'path continues. FRUSTUM_FUSED=0 turns it off from the start.'),
+          table([
+              ['Check without a GPU (tools/fused_host_check.py)', 'Result'],
+              ['Same CUDA source compiled with g++; 32 threads per warp so shuffles behave as on hardware', 'Builds and runs'],
+              ['One-hot activations sweeping every column, all six formats, FP32 and FP16 rounding', 'Bit-exact'],
+              ['Random activations, 1 to 8 rows, against float64 products of the reference decode', 'Relative error ≤ 2.3×10<super>−7</super>'],
+              ['NumPy ports of the PyTorch GGUF decoders vs the official gguf 0.19 dequantizer', 'Bit-exact'],
+          ], widths=(4.9 * inch, 1.8 * inch)),
+          H2('Next-layer expert prediction'),
+          P('Routed experts for layer N+1 used to be requested only when layer N+1 routed, so the drive sat idle '
+            'while the GPU ran layer N’s experts and layer N+1’s attention. In v0.6, during a decode step, '
+            'layer N’s MoE input is also scored by layer N+1’s router, and reads for its six best experts are '
+            'queued behind layer N’s own reads. When layer N+1 routes for real, correct guesses are already read '
+            'or in flight; guesses not yet started are cancelled. The real router always decides which experts run, '
+            'so a wrong guess costs drive time and never changes the output. The share of routed experts that were '
+            'guessed (recall) is recorded in the run evidence.'),
+          H2('Status'),
+          P('Both features are on by default, in frustum_chat and in ActivatePrime. They were verified without a GPU '
+            'as above; speed on the RTX 5060 Ti and prediction recall have not been measured yet. run_fused_check.ps1 '
+            'times each kernel against the reference on random weights, and run_speed_check.ps1 runs each model '
+            'before and after in fresh processes, reporting seconds per token, whether the token ids match and '
+            'DeepSeek’s recall. Results will be added to this section when recorded.'),
+          PageBreak()]
+
+    s += [H1('16. Interpretation and limitations'),
           H2('Bandwidth first'),
           P('An all-miss pass through six routed FP4 experts in each of 40 layers requests about 4.5 GB. At 50 MB/s '
             'that is roughly 90 s of transfer; at 500 MB/s it is roughly 9 s. Expert reuse, the GPU and host tiers, '
@@ -517,7 +568,7 @@ def story():
           H2('Still unverified'),
           P('Full-model numerical parity against the reference implementation, the v0.5 reader and placement against v0.4 '
             'on the same day (run_verify.ps1), long-context behaviour (run_long_context.ps1), other GPUs and drives, '
-            'native FP4 kernels, cross-layer expert prediction and multi-turn quality at length.'),
+            'the v0.6 speed-ups and prediction recall on the target GPU, and multi-turn quality at length.'),
           H2('Position relative to earlier work'),
           P('On-demand flash-backed model execution is not a new general concept; LLM in a Flash studies memory-limited '
             'inference that reduces transfer volume through reuse and storage-aware access. [W3] Frustum_loader '
@@ -527,7 +578,7 @@ def story():
           PageBreak()]
 
     # ---------------------------------------------------------------- 16
-    s += [H1('16. Reproduction and integration'),
+    s += [H1('17. Reproduction and integration'),
           H2('Environment'),
           P('Launchers look for Python in this order: FRUSTUM_PYTHON, .venv\\Scripts\\python.exe in the project folder, '
             'then the original Codex environment. A fresh machine:'),
@@ -540,6 +591,10 @@ def story():
                '.\\run_chat.ps1                        # interactive chat\n'
                '.\\run_chat.ps1 --prompt "Say hello." --max-new-tokens 6\n'
                '.\\run_chat.ps1 --legacy               # v0.4 placement and mmap reader'),
+          H2('v0.6 speed checks'),
+          code('.\\run_fused_check.ps1                 # each kernel vs the reference, timed, no model weights\n'
+               '.\\run_speed_check.ps1                 # Phi-4 and GLM before/after, s/token and token match\n'
+               '.\\run_speed_check.ps1 --deepseek      # adds DeepSeek with prediction recall (long)'),
           H2('Component tests'),
           code('.\\run_expert_test.ps1\n.\\run_moe_test.ps1\n.\\run_sparse_rows_test.ps1\n'
                '.\\run_block_primitives_test.ps1\n.\\run_layers0_3_test.ps1\n.\\run_repro_test.ps1\n'
@@ -554,6 +609,8 @@ def story():
               ['FRUSTUM_READER', 'Set to mmap for the legacy reader'],
               ['FRUSTUM_DEEPSEEK_HOST_GIB', 'Host-RAM expert tier size'],
               ['FRUSTUM_GLM_PLACEMENT', 'baseline, split (default) or tiered'],
+              ['FRUSTUM_FUSED', '0 turns off the v0.6 fused decode kernels'],
+              ['FRUSTUM_PREDICT_NEXT', 'Next-layer experts to read early per decode layer (default 6, 0 off)'],
           ]),
           H2('ActivatePrime'),
           P('ActivatePrime is the Electron chat front end. It keeps one Python worker warm, streams tokens, offers '
@@ -562,12 +619,12 @@ def story():
           PageBreak()]
 
     # ---------------------------------------------------------------- 17
-    s += [H1('17. Contributors and references'),
+    s += [H1('18. Contributors and references'),
           table([
               ['Contributor', 'Role'],
               ['Aaron Grace', 'Project concept, architecture, original engine, hardware testing and direction'],
               ['OpenAI (ChatGPT, Codex)', 'Implementation and analysis for v0.1 to v0.4; earlier whitepaper editions'],
-              ['Claude (Anthropic)', 'v0.5 engineering: RangeReader, tiered expert cache, eviction policy, placement, prefix reuse, streaming, this edition'],
+              ['Claude (Anthropic)', 'v0.5 and v0.6 engineering: RangeReader, tiered expert cache, eviction policy, placement, prefix reuse, streaming, fused decode kernels, next-layer prediction, this edition'],
               [f'Dino Buddy {DINO}', 'Contributor and test prompt'],
               ['DinoClaw', 'Aaron Grace\u2019s original agent runtime; assistance'],
           ], widths=(1.9 * inch, 4.8 * inch)),
@@ -586,7 +643,8 @@ def story():
           P('0.1 four MoE sublayers. 0.2 Layer 0 block. 0.3 repeatability audit and Layers 0\u20133. 0.3.8 first '
             '40-layer reply, resident head, expert cache benchmark, Phi-4 and GLM backends. 0.4.0 GLM placement and '
             'warm chat. 0.5.1 new reader, tiered cache, placement plan, live ActivatePrime benchmarks on USB-C, and the '
-            'rename from Frusium_loader to Frustum_loader.'),
+            'rename from Frusium_loader to Frustum_loader. 0.6.0 fused decode kernels for every backend and next-layer '
+            'expert prediction for DeepSeek.'),
           PageBreak()]
 
     # ---------------------------------------------------------------- appendix
@@ -623,7 +681,7 @@ def build():
     tmp = OUT.with_suffix('.tmp.pdf')
     doc = SimpleDocTemplate(str(tmp), pagesize=letter, leftMargin=0.9 * inch, rightMargin=0.9 * inch,
                             topMargin=0.95 * inch, bottomMargin=0.85 * inch,
-                            title='Frustum_loader Whitepaper v0.5.1', author='Aaron Grace',
+                            title='Frustum_loader Whitepaper v0.6.0', author='Aaron Grace',
                             subject='SSD-streamed mixture-of-experts inference on a 16 GB GPU')
     doc.build(story(), onFirstPage=on_page, onLaterPages=on_page)
     from pypdf import PdfReader, PdfWriter
@@ -632,7 +690,7 @@ def build():
         p = ROOT / name
         if p.exists():
             w.add_attachment(name, p.read_bytes())
-    w.add_metadata({'/Title': 'Frustum_loader Whitepaper v0.5.1', '/Author': 'Aaron Grace'})
+    w.add_metadata({'/Title': 'Frustum_loader Whitepaper v0.6.0', '/Author': 'Aaron Grace'})
     with open(OUT, 'wb') as f:
         w.write(f)
     tmp.unlink()

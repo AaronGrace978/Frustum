@@ -2,9 +2,9 @@
 
 Streaming inference for checkpoints far larger than GPU memory. The reference target is DeepSeek-V4.1-Flash (about 510 GB on disk) on one 16 GB GPU, read from an external SSD.
 
-Current code: v0.5.1. Live benchmarks from a first test session are below. The numbers under "History and recorded evidence" were measured with v0.4. Run the verification step below to get current numbers for your machine.
+Current code: v0.6.0 (fused decode kernels and next-layer expert prediction; GPU numbers pending, see below). Live v0.5.1 benchmarks from a first test session are below. The numbers under "History and recorded evidence" were measured with v0.4. Run the verification step below to get current numbers for your machine.
 
-**Whitepaper:** [`whitepaper/Frustum_loader_Whitepaper_v0.5.1.pdf`](whitepaper/Frustum_loader_Whitepaper_v0.5.1.pdf) (full technical write-up, v0.5.1 live benchmarks, evidence JSONs embedded). Rebuild with `python whitepaper/build_whitepaper.py`. Earlier editions are in `whitepaper/archive/`.
+**Whitepaper:** [`whitepaper/Frustum_loader_Whitepaper_v0.6.0.pdf`](whitepaper/Frustum_loader_Whitepaper_v0.6.0.pdf) (full technical write-up, v0.5.1 live benchmarks, v0.6 design and checks, evidence JSONs embedded). Rebuild with `python whitepaper/build_whitepaper.py`. Earlier editions are in `whitepaper/archive/`.
 
 ## Quick start
 
@@ -19,6 +19,28 @@ The launchers look for Python in this order: `FRUSTUM_PYTHON`, `.venv\Scripts\py
     .venv\Scripts\pip install -r requirements.txt
 
 The model folder defaults to the parent of this folder. Set `FRUSTUM_MODEL` or pass `--model` to point elsewhere. Weights and the CUDA environment are not bundled.
+
+## What v0.6 changes
+
+v0.5 moved the bottleneck. With the drive on a USB 3.x link, a large share of each token is now spent on the GPU, and most of that was not arithmetic: every backend decoded each packed weight matrix into a full FP32 copy on every token, then multiplied one row of activations by it.
+
+**Fused decode kernels** (`fused_kernels.py`). For decode steps (up to 8 rows of activations), one CUDA kernel reads the packed bytes once, decodes them in registers and accumulates the dot products. No FP32 copy of the matrix is ever written. Formats: GGUF Q4_K, Q5_K, Q6_K and Q8_0 (Phi-4, GLM), FP8 E4M3 with 32x32 E8M0 blocks (DeepSeek dense and shared experts), packed FP4 E2M1 with per-32 E8M0 scales (DeepSeek routed experts). The source is compiled at load time with NVRTC, which already ships in the PyTorch CUDA wheel, so nothing new is installed.
+- Decoded weights are bit-identical to the PyTorch reference decoders (same operations, same order, FMA off; FP16 rounding where the reference rounds). Only the summation order differs from cuBLAS.
+- Before anything uses it, the first call for each matrix shape is also run on the reference path and compared. A mismatch, compile failure or launch error switches the fused path off for the process and prints why. Prefill keeps the reference path.
+- `FRUSTUM_FUSED=0` or `frustum_chat.py --no-fused` turns it off.
+- Checked without a GPU by `tools/fused_host_check.py`, which compiles the same CUDA source with g++ (32 threads per warp so the warp shuffles behave as on hardware). Every column of every format is bit-exact against NumPy ports of the reference decoders, and those ports match the official `gguf` dequantizer bit for bit.
+
+**Next-layer expert prediction** (DeepSeek, `streamed_moe.py`). During a decode step, layer N's MoE input is also run through layer N+1's router, and reads for its top experts start in the background straight away, behind layer N's own reads. When layer N+1 routes for real, reads that were guessed right are already done or under way; wrong guesses are cancelled if they have not started. The real router still decides which experts run, so a wrong guess costs drive time, never accuracy. Recall (the share of routed experts that were guessed) is reported in `--evidence` and `/stats`. `FRUSTUM_PREDICT_NEXT=N` or `--predict-next N` sets how many experts to guess per layer (default 6; 0 disables).
+
+Both are on by default, including in ActivatePrime. `--legacy` turns both off.
+
+### Measure it
+
+    .\run_fused_check.ps1                 # kernels vs reference on random weights, with timings (seconds, no models)
+    .\run_speed_check.ps1                 # Phi-4 and GLM: reference then v0.6, s/token and token match
+    .\run_speed_check.ps1 --deepseek      # adds DeepSeek with prediction recall (long)
+
+`speed_check_results.json` records both runs. Token ids can differ after many tokens because the summation order changed and a near-tie can flip; the first tokens should match.
 
 ## What v0.5 changed
 
@@ -156,6 +178,7 @@ See the script header for caveats about chat templates and provider quantization
 | `placement.py` | What stays resident, from checkpoint metadata |
 | `generation.py` | Chat template and prefill / reuse / decode control flow (no torch) |
 | `streamed_moe.py`, `layers0_3_block.py`, `layer0_block.py`, `block_primitives.py`, `sparse_rows.py`, `expert_correctness.py` | Model arithmetic and its tests |
+| `fused_kernels.py`, `fused_check.py`, `speed_check.py`, `tools/fused_host_check.py` | v0.6 fused decode kernels, their GPU check and benchmark, the A/B speed check, the no-GPU source check |
 | `frustum_chat.py` | Chat runner |
 | `decode_cache_replay.py` | Replay recorded routing through cache policies and tier sizes |
 | `verify_upgrade.py`, `selftest.py`, `long_context_check.py`, `reference_parity.py`, `baseline_llamacpp.py` | Verification |
@@ -284,4 +307,4 @@ Start interactive text chat with `.\run_chat.ps1`, or run one prompt with `.\run
 
 - **Aaron Grace** — Architecture, original engine (v0.1–v0.4), layer-0 block, MoE pipeline, sparse attention, GGUF backends, ActivatePrime
 - **OpenAI** — Codex environment and tooling used during development
-- **Claude (Anthropic)** — v0.5/v0.5.1 engineering: I/O rewrite, tiered expert cache, placement planner, generation control flow, cache policy, batched attention, expert decode, GLM cache migration, verification harness, ActivatePrime integration
+- **Claude (Anthropic)** — v0.5 to v0.6 engineering: fused decode kernels, next-layer expert prediction, I/O rewrite, tiered expert cache, placement planner, generation control flow, cache policy, batched attention, expert decode, GLM cache migration, verification harness, ActivatePrime integration

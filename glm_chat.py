@@ -13,6 +13,7 @@ import torch
 import torch.nn.functional as F
 
 from expert_cache import TieredExpertCache
+import fused_kernels
 from frustum_loader import TensorRange
 from phi4_chat import unpack
 
@@ -141,8 +142,11 @@ class Glm:
 
     def linear(self, x, name, expert=None):
         raw, kind = self.packed(name + '.weight', expert)
-        return torch.cat([F.linear(x, decode_weight(chunk, kind).to(x.dtype))
-                          for chunk in raw.split(2048)], -1)
+
+        def reference():
+            return torch.cat([F.linear(x, decode_weight(chunk, kind).to(x.dtype))
+                              for chunk in raw.split(2048)], -1)
+        return fused_kernels.get(torch).gguf(x, raw, kind, reference)
 
     def norm(self, x, name):
         return F.rms_norm(x.float(), (x.shape[-1],), self.packed(name + '.weight')[0], self.norm_eps).to(x.dtype)

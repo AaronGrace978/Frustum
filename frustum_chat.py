@@ -25,6 +25,7 @@ from block_primitives import hc_pre
 from frustum_loader import Catalog, RangeReader, default_model_root
 from generation import chat_prompt, drive, reusable_prefix  # chat_prompt re-exported for callers
 from layers0_3_block import GIB, SequentialBlocks
+import fused_kernels
 import placement
 
 
@@ -195,6 +196,12 @@ def build_plan(catalog, args, total, free):
     return p
 
 
+def fused_report():
+    fused = fused_kernels.get(torch)
+    return dict(enabled=fused.enabled, fused_calls=fused.calls, checked_shapes=len(fused.checked),
+                off_reason=fused.reason)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--model', type=Path, default=Path(default_model_root()))
@@ -226,6 +233,11 @@ def main():
                         help='Record the K most likely tokens and their log-probabilities per step in --evidence')
     parser.add_argument('--no-reuse', action='store_true', help='Re-prefill the whole conversation every turn')
     parser.add_argument('--verbose', action='store_true', help='Per-token timing lines instead of streamed text')
+    parser.add_argument('--no-fused', action='store_true',
+                        help='Decode steps use the reference decode-then-multiply path instead of fused kernels')
+    parser.add_argument('--predict-next', type=int,
+                        help='Experts of the next layer to start reading early during decode (0 disables). '
+                             'Default: FRUSTUM_PREDICT_NEXT, else experts per token')
     parser.add_argument('--legacy', action='store_true',
                         help='v0.4 behaviour for A/B runs: mmap reader, 256 MiB caches, streamed head, no reuse')
     args = parser.parse_args()
@@ -251,8 +263,12 @@ def main():
         parser.error('Require --gpu-cap-gib >= 6 and --reserve-gib >= 0.5')
     if not torch.cuda.is_available():
         raise SystemExit('CUDA required')
+    if args.predict_next is not None and args.predict_next < 0:
+        parser.error('--predict-next takes 0 or more')
     if args.legacy:
         os.environ['FRUSTUM_READER'] = 'mmap'
+    if args.legacy or args.no_fused:
+        os.environ['FRUSTUM_FUSED'] = '0'
     free, total = torch.cuda.mem_get_info()
     catalog = Catalog(args.model)
     plan = build_plan(catalog, args, total, free)
@@ -265,7 +281,8 @@ def main():
     moe_options = dict(host_cache_mib=plan['host_cache_mib'], router_cache_mib=plan['router_cache_mib'],
                        io_threads=0 if args.legacy else args.io_threads, gpu_policy=plan['gpu_policy'],
                        host_policy=plan['host_policy'], pin_shared=plan['pin_shared'],
-                       cap_bytes=plan['gpu_cap_bytes'])
+                       cap_bytes=plan['gpu_cap_bytes'],
+                       predict_next=0 if args.legacy else args.predict_next)
     engine = SequentialBlocks(catalog, args.context, plan['dense_cache_mib'], plan['expert_cache_mib'],
                               catalog.config['text_config']['num_hidden_layers'], moe_options)
     session = Session(engine, tokenizer, head, reuse=not (args.no_reuse or args.legacy))
@@ -300,6 +317,7 @@ def main():
                     continue
                 if command == '/stats':
                     print(json.dumps(dict(expert_cache=engine.moe.cache.stats(), dense=engine.ops.loader.stats(),
+                                          prediction=engine.moe.prediction_stats(), fused=fused_report(),
                                           memory=engine.memory()), indent=2))
                     continue
                 if not command:
@@ -371,6 +389,7 @@ def main():
                                                  top_p=args.top_p, seed=args.seed),
                                    legacy=args.legacy, io_threads=moe_options['io_threads'],
                                    expert_cache=cache.stats(), dense_cache=engine.ops.loader.stats(),
+                                   prediction=engine.moe.prediction_stats(), fused=fused_report(),
                                    top_logprobs=distributions,
                                    token_timings=timings), handle, indent=2)
             if args.prompt is not None:

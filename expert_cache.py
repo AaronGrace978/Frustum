@@ -86,11 +86,12 @@ class TieredExpertCache:
             if key not in self.cache and key not in self.ram and key not in self.pending:
                 self.pending[key] = self.pool.submit(self._read, key)
 
-    def discard_pending(self):
-        """Forget background reads nobody collected, e.g. after an interrupted forward pass."""
-        for future in self.pending.values():
-            future.cancel()
-        self.pending.clear()
+    def discard_pending(self, keep=()):
+        """Forget background reads nobody collected, e.g. after an interrupted forward pass.
+        Reads for keys in keep stay queued (next-layer prediction issued them early)."""
+        keep = set(keep)
+        for key in [key for key in self.pending if key not in keep]:
+            self.pending.pop(key).cancel()
 
     def _memory_ok(self, additional):
         if not self.cuda or self.cap is None:
