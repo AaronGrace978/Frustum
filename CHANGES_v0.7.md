@@ -1,6 +1,6 @@
-# Frustum_loader v0.7 working notes (uncommitted, GPU path unrun)
+# Frustum_loader v0.7 implementation and validation notes (GPU path unrun)
 
-Base: `ed3a77f` (v0.6.0). Nothing here is committed. Nothing here has run on the RTX 5060 Ti
+Base: `ed3a77f` (v0.6.0). The implementation described here is committed as v0.7. Nothing here has run on the RTX 5060 Ti
 or against the checkpoint: the development sandbox had no GPU, no PyTorch and no weights.
 Every number below is either arithmetic, a replay of routing you recorded earlier, or a
 unit-test result, and is labelled as such. No benchmark result is claimed.
@@ -148,11 +148,9 @@ stop and keep the evidence: these patches are not supposed to be able to change 
 ## 7. Rollback
 
 Per feature: the switches in section 4.
-Everything (nothing is committed):
+Everything (revert the committed v0.7 implementation rather than deleting files by hand):
 
-    git checkout -- cache_policy.py decode_cache_replay.py expert_cache.py frustum_chat.py frustum_loader.py streamed_moe.py
-    del io_ledger.py os_cache.py spill_tier.py roofline.py bench_e2e.py run_bench.ps1 selftest_v07.py run_selftest_v07.ps1 CHANGES_v0.7.md
-    rmdir /s v07_logs
+    git revert 6e3f1ca
 
 Or apply in reverse: `git apply -R v07_logs\v0.6_to_v0.7.patch`. The spill folder, if you
 created one, is separate: delete it by hand.

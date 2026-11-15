@@ -1,4 +1,4 @@
-"""Build Frustum_loader_Whitepaper_v0.6.0.pdf from this script and whitepaper/assets.
+"""Build Frustum_loader_Whitepaper_v0.7.0.pdf from this script and whitepaper/assets.
 
 Run from the repo root:  python whitepaper/build_whitepaper.py
 Needs reportlab and pypdf. Evidence JSONs in the repo root are embedded as attachments.
@@ -18,8 +18,8 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph, Prefo
 ROOT = Path(__file__).resolve().parent.parent
 WP = ROOT / 'whitepaper'
 A = WP / 'assets'
-OUT = WP / 'Frustum_loader_Whitepaper_v0.6.0.pdf'
-VERSION = 'Version 0.6.0 | November 14, 2026'
+OUT = WP / 'Frustum_loader_Whitepaper_v0.7.0.pdf'
+VERSION = 'Version 0.7.0 | November 15, 2026'
 
 FONT_DIRS = [Path('/usr/share/fonts/truetype/dejavu'), Path('C:/Windows/Fonts')]
 
@@ -113,7 +113,7 @@ def on_page(canvas, doc):
     canvas.setStrokeColor(TEAL)
     canvas.setLineWidth(1.6)
     canvas.line(0.75 * inch, h - 0.66 * inch, w - 0.75 * inch, h - 0.66 * inch)
-    canvas.drawString(0.75 * inch, 0.5 * inch, f'{VERSION} | Live ActivatePrime benchmarks')
+    canvas.drawString(0.75 * inch, 0.5 * inch, f'{VERSION} | Live v0.5.1 benchmarks; v0.7 measurement plan')
     canvas.drawRightString(w - 0.75 * inch, 0.5 * inch, str(doc.page))
     canvas.restoreState()
 
@@ -126,7 +126,7 @@ def story():
           P(f'Technical whitepaper | {VERSION}'),
           P('Project concept, architecture and direction: <b>Aaron Grace</b>. '
             'Engineering contributors: <b>OpenAI</b> (ChatGPT and Codex, v0.1 to v0.4 implementation and analysis) and '
-            '<b>Claude / Anthropic</b> (v0.5 I/O, placement and cache engineering). '
+            '<b>Claude / Anthropic</b> (v0.5-v0.7 I/O, placement, cache and measurement engineering). '
             f'Contributor: Dino Buddy {DINO}. The project also received assistance from DinoClaw, '
             'Aaron Grace\u2019s original agent runtime.'),
           P('The project was previously published as <i>Frusium_loader</i>. The name is now Frustum_loader: '
@@ -139,8 +139,9 @@ def story():
             'roughly 510 GB checkpoint with 40 layers and 384 routed experts per layer. Version 0.3.8 produced its '
             'first six tokens in 1,118 s. Version 0.5.1, with the drive on a USB 3.x link, produces about one token '
             'every 8 s. Version 0.6 adds fused decode kernels for all three backends and next-layer expert '
-            'prediction for DeepSeek (Section 15). Phi-4 now runs about sixteen times faster per token; prediction '
-            'is off by default after a slower first DeepSeek test.'),
+            'prediction for DeepSeek. Version 0.7 adds end-to-end I/O accounting, roofline reporting, safer cache '
+            'behaviour and an opt-in verified spill tier (Section 16). Phi-4 now runs about sixteen times faster per '
+            'token; prediction is off by default after a slower first DeepSeek test. No v0.7 GPU benchmark is claimed yet.'),
           table([
               ['Checkpoint', 'Live result in ActivatePrime (v0.5.1, T7 on USB-C)'],
               ['DeepSeek V4.1 Flash (~510 GB)', '24 tokens in 192.2 s on the first turn (~8.0 s/token); 24 tokens in 227.1 s on the second turn (~9.5 s/token)'],
@@ -168,9 +169,10 @@ def story():
               ['13', 'GLM placement and warm chat'],
               ['14', 'v0.5.1 live benchmarks in ActivatePrime'],
               ['15', 'v0.6: fused decode kernels and next-layer prediction'],
-              ['16', 'Interpretation and limitations'],
-              ['17', 'Reproduction and integration'],
-              ['18', 'Contributors and references'],
+              ['16', 'v0.7: I/O measurement, roofline and guarded data movement'],
+              ['17', 'Interpretation and limitations'],
+              ['18', 'Reproduction and integration'],
+              ['19', 'Contributors and references'],
               ['A', 'Run evidence (embedded attachments)'],
           ], widths=(0.8 * inch, 5.9 * inch)),
           picture(A / 'deepseek_progress.png', 5.0 * inch,
@@ -557,10 +559,51 @@ def story():
             'Fused kernels stay on by default. run_fused_check.ps1 '
             'times each kernel against the reference on random weights, and run_speed_check.ps1 runs each model '
             'before and after in fresh processes, reporting seconds per token, whether the token ids match and '
-            'DeepSeek’s recall, with prediction off and on. These are single runs from the app.'),
-          PageBreak()]
+            'DeepSeek’s recall, with prediction off and on. These are single runs from the app.')]
 
-    s += [H1('16. Interpretation and limitations'),
+    s += [H1('16. v0.7: I/O measurement, roofline and guarded data movement'),
+          P('Version 0.7 is a measurement-and-I/O release. It does not change model weights, the experts selected by '
+            'the real router, attention, or the reference path. Its purpose is to determine whether a decode step is '
+            'limited by checkpoint storage or by GPU work before further optimization is chosen. The additions below '
+            'were developed in a no-GPU sandbox and include replay arithmetic from saved v0.4 routing. They are not '
+            'v0.7 benchmark results on the target checkpoint.'),
+          H2('Measure the bytes and the time separately'),
+          P('The new I/O ledger records logical expert bytes, first-time versus repeated reads, drive-busy interval '
+            'union, queue depth, caller-blocked time, overlap, and speculative-read outcomes. Best-effort physical '
+            'device counters distinguish file reads requested by the process from operating-system cache hits. '
+            'bench_e2e.py and run_bench.ps1 run cold and warm configurations at least three times and report median '
+            'and p95 latency, logical and physical bytes, effective throughput, drive utilization, and a roofline verdict.'),
+          table([
+              ['Component', 'What it establishes'],
+              ['io_ledger.py / os_cache.py', 'Per-step logical I/O accounting plus best-effort physical device bytes; neither changes model arithmetic.'],
+              ['bench_e2e.py / run_bench.ps1 / roofline.py', 'Repeatable cold/warm A/B runs and a storage-bound versus compute-bound verdict.'],
+              ['decode_cache_replay.py', 'Replays saved routing traces through cache budgets and policies, including first-time and repeat bytes.'],
+              ['selftest_v07.py', 'No-GPU checks for the new accounting, caching, spill, replay and roofline rules.'],
+          ], widths=(2.55 * inch, 4.15 * inch)),
+          H2('What the existing trace can and cannot say'),
+          P('An all-miss token through six routed experts in each of 40 layers requests about 4.51 GB. The saved '
+            'v0.4 two-step routing trace replays to 49.6% reuse on the second step, yet with an 8 GiB or larger RAM '
+            'tier that step still requires 121 first-time expert reads, or about 2.27 GB. At 500 MB/s that is about '
+            '4.5 s of storage time. This is arithmetic and replay, not a measurement of v0.7 or proof that every '
+            'conversation behaves the same way. The new benchmark is intended to observe how that first-time traffic '
+            'changes over a real conversation.'),
+          H2('Guarded data movement'),
+          P('The expert cache protects all current-layer experts from mutual eviction, coalesces nearby tensor ranges '
+            'when the shard layout permits, and can shrink the host tier below a free-RAM floor. An opt-in spill tier '
+            'copies read expert bytes to a faster local drive; checkpoint-identity and CRC-32 checks make a mismatch, '
+            'truncation or changed checkpoint fall back to the original source.'),
+          H2('Prediction is scored before it competes for I/O'),
+          P('Next-layer prediction remains off by default. When enabled, shadow records precision without reading; '
+            'gated reads only after enough observations and 0.6 cold-guess precision; always reproduces the v0.6 '
+            'policy. Guesses are issued after the current layer’s required reads, so they never queue ahead of '
+            'router-selected experts. A bad guess can consume I/O, but never changes the model output.'),
+          H2('Current validation status'),
+          P('In the sandbox, 24 no-GPU v0.7 checks passed: ledger accounting, coalesced reads, cache protection, '
+            'speculative-read accounting, asynchronous safety, RAM guard, spill integrity, prefix reuse and roofline '
+            'verdicts. Five PyTorch-dependent numerical checks were skipped. GPU and Windows paths, actual shard '
+            'contiguity, full-model parity and performance effects remain unrun on the target machine; no v0.7 speed '
+            'claim is made in this report.'),
+          H1('17. Interpretation and limitations'),
           H2('Bandwidth first'),
           P('An all-miss pass through six routed FP4 experts in each of 40 layers requests about 4.5 GB. At 50 MB/s '
             'that is roughly 90 s of transfer; at 500 MB/s it is roughly 9 s. Expert reuse, the GPU and host tiers, '
@@ -568,14 +611,12 @@ def story():
             'DeepSeek decode lands near 8 s per token. Further gains are most likely from reducing bytes per token '
             '(better reuse, prediction, layout) rather than from faster arithmetic.'),
           H2('Threats to measurement'),
-          P('Logical read counters measure bytes requested from files, not physical device I/O. OS caching may satisfy '
-            'reads. The live v0.5.1 numbers are single runs from the app, without per-token timing breakdowns or '
-            'controlled cache state. First-use GPU initialization and validation work contaminate elapsed time in the '
-            'older runs. The USB comparison changes the link only; it was not repeated in reverse order.'),
+          P('Logical reads are requested bytes, not physical device I/O, and the OS cache may satisfy them. The live '
+            'v0.5.1 figures are single app runs without per-token breakdowns or controlled cache state. First-use GPU '
+            'initialization and validation contaminate older timings; the USB comparison was not repeated in reverse order.'),
           H2('Still unverified'),
-          P('Full-model numerical parity against the reference implementation, the v0.5 reader and placement against v0.4 '
-            'on the same day (run_verify.ps1), long-context behaviour (run_long_context.ps1), other GPUs and drives, '
-            'the v0.6 speed-ups and prediction recall on the target GPU, and multi-turn quality at length.'),
+          P('Full-model reference parity, same-day v0.4 comparison, long-context behaviour, other GPUs and drives, '
+            'v0.6 speed and prediction checks, v0.7 GPU and Windows-path checks, and long multi-turn quality.'),
           H2('Position relative to earlier work'),
           P('On-demand flash-backed model execution is not a new general concept; LLM in a Flash studies memory-limited '
             'inference that reduces transfer volume through reuse and storage-aware access. [W3] Frustum_loader '
@@ -584,8 +625,8 @@ def story():
             'made by these tests.'),
           PageBreak()]
 
-    # ---------------------------------------------------------------- 16
-    s += [H1('17. Reproduction and integration'),
+    # ---------------------------------------------------------------- 18
+    s += [H1('18. Reproduction and integration'),
           H2('Environment'),
           P('Launchers look for Python in this order: FRUSTUM_PYTHON, .venv\\Scripts\\python.exe in the project folder, '
             'then the original Codex environment. A fresh machine:'),
@@ -595,6 +636,7 @@ def story():
           H2('Chat and verification'),
           code('cd G:\\Models\\DeepSeek-V4.1-Flash\\Frustum_loader\n'
                '.\\run_verify.ps1                      # tests, drive speed, v0.4 parity, timed chat\n'
+               '.\\run_selftest_v07.ps1                 # v0.7 I/O, cache, spill and roofline checks\n'
                '.\\run_chat.ps1                        # interactive chat\n'
                '.\\run_chat.ps1 --prompt "Say hello." --max-new-tokens 6\n'
                '.\\run_chat.ps1 --legacy               # v0.4 placement and mmap reader'),
@@ -602,6 +644,14 @@ def story():
           code('.\\run_fused_check.ps1                 # each kernel vs the reference, timed, no model weights\n'
                '.\\run_speed_check.ps1                 # Phi-4 and GLM before/after, s/token and token match\n'
                '.\\run_speed_check.ps1 --deepseek      # adds DeepSeek with prediction recall (long)'),
+          H2('v0.7 end-to-end I/O benchmark'),
+          code('.\\run_selftest.ps1 ; .\\run_selftest_v07.ps1\n'
+               '.\\run_verify.ps1\n'
+               '.\\run_bench.ps1 --configs baseline patch shadow\n'
+               'python roofline.py bench_runs\\<timestamp>\\patch_cold_0.json '
+               'bench_runs\\<timestamp>\\patch_warm_0.json\n'
+               '# If the roofline says first-time storage reads dominate:\n'
+               '.\\run_bench.ps1 --configs patch spill --spill-dir D:\\frustum_spill'),
           H2('Component tests'),
           code('.\\run_expert_test.ps1\n.\\run_moe_test.ps1\n.\\run_sparse_rows_test.ps1\n'
                '.\\run_block_primitives_test.ps1\n.\\run_layers0_3_test.ps1\n.\\run_repro_test.ps1\n'
@@ -618,6 +668,8 @@ def story():
               ['FRUSTUM_GLM_PLACEMENT', 'baseline, split (default) or tiered'],
               ['FRUSTUM_FUSED', '0 turns off the v0.6 fused decode kernels'],
               ['FRUSTUM_PREDICT_NEXT', 'Next-layer experts to read early per decode layer (default 0, off)'],
+              ['FRUSTUM_PREDICT_MODE', 'shadow, gated (default when enabled), or always'],
+              ['FRUSTUM_COALESCE / FRUSTUM_PROTECT_LAYER', '0 restores the v0.6 read or layer-protection behaviour for A/B runs'],
           ]),
           H2('ActivatePrime'),
           P('ActivatePrime is the Electron chat front end. It keeps one Python worker warm, streams tokens, offers '
@@ -625,13 +677,13 @@ def story():
             'CUDA environment are not bundled with either project.'),
           PageBreak()]
 
-    # ---------------------------------------------------------------- 17
-    s += [H1('18. Contributors and references'),
+    # ---------------------------------------------------------------- 19
+    s += [H1('19. Contributors and references'),
           table([
               ['Contributor', 'Role'],
               ['Aaron Grace', 'Project concept, architecture, original engine, hardware testing and direction'],
               ['OpenAI (ChatGPT, Codex)', 'Implementation and analysis for v0.1 to v0.4; earlier whitepaper editions'],
-              ['Claude (Anthropic)', 'v0.5 and v0.6 engineering: RangeReader, tiered expert cache, eviction policy, placement, prefix reuse, streaming, fused decode kernels, next-layer prediction, this edition'],
+              ['Claude (Anthropic)', 'v0.5-v0.7 engineering: RangeReader, tiered expert cache, eviction policy, placement, prefix reuse, streaming, fused decode kernels, next-layer prediction, I/O ledger, roofline and spill tier'],
               [f'Dino Buddy {DINO}', 'Contributor and test prompt'],
               ['DinoClaw', 'Aaron Grace\u2019s original agent runtime; assistance'],
           ], widths=(1.9 * inch, 4.8 * inch)),
@@ -649,9 +701,11 @@ def story():
           H2('Version history'),
           P('0.1 four MoE sublayers. 0.2 Layer 0 block. 0.3 repeatability audit and Layers 0\u20133. 0.3.8 first '
             '40-layer reply, resident head, expert cache benchmark, Phi-4 and GLM backends. 0.4.0 GLM placement and '
-            'warm chat. 0.5.1 new reader, tiered cache, placement plan, live ActivatePrime benchmarks on USB-C, and the '
+            'warm chat. 0.5.1: new reader, tiered cache, placement plan, live ActivatePrime benchmarks on USB-C, and the '
             'rename from Frusium_loader to Frustum_loader. 0.6.0 fused decode kernels for every backend and next-layer '
-            'expert prediction for DeepSeek.'),
+            'expert prediction for DeepSeek. 0.7.0 I/O ledger and physical-device counters, cold/warm roofline '
+            'benchmarking, routing-trace replay, verified opt-in spill storage, layer-safe cache admission, coalesced '
+            'reads, RAM guard and measured prediction gating; target-GPU benchmarks remain pending.'),
           PageBreak()]
 
     # ---------------------------------------------------------------- appendix
@@ -681,6 +735,10 @@ EVIDENCE = [
     ('sparse_rows_results.json', 'Sparse row lookups'),
     ('block_primitives_results.json', 'Residual primitives'),
     ('model_inspection.json', 'Checkpoint catalog summary'),
+    ('CHANGES_v0.7.md', 'v0.7 implementation notes, audit and validation status'),
+    ('v07_logs/roofline_arithmetic.json', 'v0.7 roofline arithmetic and replay inputs'),
+    ('v07_logs/selftest_v07_sandbox.log', 'v0.7 no-GPU self-test result'),
+    ('v07_logs/replay_saved_v04_profile_sandbox.log', 'Replay of saved v0.4 routing'),
 ]
 
 
@@ -688,7 +746,7 @@ def build():
     tmp = OUT.with_suffix('.tmp.pdf')
     doc = SimpleDocTemplate(str(tmp), pagesize=letter, leftMargin=0.9 * inch, rightMargin=0.9 * inch,
                             topMargin=0.95 * inch, bottomMargin=0.85 * inch,
-                            title='Frustum_loader Whitepaper v0.6.0', author='Aaron Grace',
+                            title='Frustum_loader Whitepaper v0.7.0', author='Aaron Grace',
                             subject='SSD-streamed mixture-of-experts inference on a 16 GB GPU')
     doc.build(story(), onFirstPage=on_page, onLaterPages=on_page)
     from pypdf import PdfReader, PdfWriter
@@ -697,7 +755,7 @@ def build():
         p = ROOT / name
         if p.exists():
             w.add_attachment(name, p.read_bytes())
-    w.add_metadata({'/Title': 'Frustum_loader Whitepaper v0.6.0', '/Author': 'Aaron Grace'})
+    w.add_metadata({'/Title': 'Frustum_loader Whitepaper v0.7.0', '/Author': 'Aaron Grace'})
     with open(OUT, 'wb') as f:
         w.write(f)
     tmp.unlink()

@@ -2,13 +2,14 @@
 
 Streaming inference for checkpoints far larger than GPU memory. The reference target is DeepSeek-V4.1-Flash (about 510 GB on disk) on one 16 GB GPU, read from an external SSD.
 
-Current code: v0.6.0 (fused decode kernels and next-layer expert prediction; GPU numbers pending, see below). Live v0.5.1 benchmarks from a first test session are below. The numbers under "History and recorded evidence" were measured with v0.4. Run the verification step below to get current numbers for your machine.
+Current code: v0.7 (measured I/O and roofline tooling, safer cache behaviour, and optional spill storage; real-GPU v0.7 benchmarks are still pending, see below). Live v0.5.1 benchmarks from a first test session are below. The numbers under "History and recorded evidence" were measured with v0.4. Run the verification and benchmark steps below to get current numbers for your machine.
 
-**Whitepaper:** [`whitepaper/Frustum_loader_Whitepaper_v0.6.0.pdf`](whitepaper/Frustum_loader_Whitepaper_v0.6.0.pdf) (full technical write-up, v0.5.1 live benchmarks, v0.6 design and checks, evidence JSONs embedded). Rebuild with `python whitepaper/build_whitepaper.py`. Earlier editions are in `whitepaper/archive/`.
+**Whitepaper:** [`whitepaper/Frustum_loader_Whitepaper_v0.7.0.pdf`](whitepaper/Frustum_loader_Whitepaper_v0.7.0.pdf) documents the v0.6 design, v0.5.1 live benchmarks, and v0.7's I/O/roofline work and validation status. The detailed v0.7 implementation and its recorded sandbox/replay evidence are in [`CHANGES_v0.7.md`](CHANGES_v0.7.md) and `v07_logs/`. Rebuild the current whitepaper with `python whitepaper/build_whitepaper.py`. Earlier editions are in `whitepaper/archive/`.
 
 ## Quick start
 
     .\run_verify.ps1                      # tests, drive speed, v0.4 parity, timed chat
+    .\run_selftest_v07.ps1                 # v0.7 I/O, cache, spill, and roofline tests
     .\run_chat.ps1                        # interactive chat
     .\run_chat.ps1 --prompt "Say hello." --max-new-tokens 6
 
@@ -19,6 +20,25 @@ The launchers look for Python in this order: `FRUSTUM_PYTHON`, `.venv\Scripts\py
     .venv\Scripts\pip install -r requirements.txt
 
 The model folder defaults to the parent of this folder. Set `FRUSTUM_MODEL` or pass `--model` to point elsewhere. Weights and the CUDA environment are not bundled.
+
+## What v0.7 changes
+
+v0.7 is a measurement-and-I/O release. It does not change model weights, routing decisions, attention, or the reference path. Its purpose is to show whether a decode step is actually limited by the checkpoint drive or the GPU before spending effort on the wrong optimization. The new GPU and Windows-specific paths were byte-compiled and exercised in a no-GPU sandbox, but have **not** yet run against the real DeepSeek checkpoint; no v0.7 speed claim is made.
+
+- **End-to-end I/O accounting.** `io_ledger.py` records logical expert bytes, first-time versus repeated reads, queue depth, drive-busy time, blocking, overlap, and speculative-read waste. `os_cache.py` also collects best-effort physical device read counters, so buffered Windows reads are not mistaken for physical disk traffic.
+- **Roofline and reproducible benchmarks.** `bench_e2e.py`, `run_bench.ps1`, and `roofline.py` run cold/warm configurations at least three times and report median/p95 latency, logical/physical bytes, effective throughput, drive utilisation, and whether the run appears storage- or compute-bound. Routing traces can now be replayed with `decode_cache_replay.py`.
+- **Optional verified spill tier.** `--spill-dir` copies previously read expert bytes to a faster local drive. Every entry is tied to the checkpoint identity and protected by CRC-32; a mismatch, truncation, or changed checkpoint falls back to the original weights. It is disabled unless a spill directory is explicitly supplied.
+- **Safer expert-cache behaviour.** A cache now protects all experts needed by the current layer from evicting one another, coalesces nearby tensors into fewer positioned reads where the shard layout permits, and can shrink the host cache if free RAM falls below `--ram-floor-gib` (3 GiB by default).
+- **Prediction is measurable before it reads.** Next-layer prediction still never changes the experts selected by the real router. It now supports `shadow` (score only), `gated` (the default when prediction is enabled; read only after measured cold-guess precision reaches 0.6), and `always` (the v0.6-style policy). Guesses are issued only after the current layer's required reads, so they cannot queue ahead of selected experts. Prediction remains off by default.
+
+Start with the checks, then take a baseline before enabling optional features:
+
+    .\run_selftest.ps1 ; .\run_selftest_v07.ps1
+    .\run_verify.ps1
+    .\run_bench.ps1 --configs baseline patch shadow
+    python roofline.py bench_runs\<timestamp>\patch_cold_0.json bench_runs\<timestamp>\patch_warm_0.json
+
+If the roofline says first-time storage reads dominate, try the spill tier on a faster internal SSD: `.\run_bench.ps1 --configs patch spill --spill-dir D:\frustum_spill`. If it says repeated reads dominate, tune `--host-cache-gib` and replay a recorded trace. Keep the resulting token IDs: they must match across configurations.
 
 ## What v0.6 changes
 
