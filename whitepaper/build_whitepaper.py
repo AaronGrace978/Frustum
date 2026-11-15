@@ -139,7 +139,8 @@ def story():
             'roughly 510 GB checkpoint with 40 layers and 384 routed experts per layer. Version 0.3.8 produced its '
             'first six tokens in 1,118 s. Version 0.5.1, with the drive on a USB 3.x link, produces about one token '
             'every 8 s. Version 0.6 adds fused decode kernels for all three backends and next-layer expert '
-            'prediction for DeepSeek (Section 15); their GPU measurements are pending.'),
+            'prediction for DeepSeek (Section 15). Phi-4 now runs about sixteen times faster per token; prediction '
+            'is off by default after a slower first DeepSeek test.'),
           table([
               ['Checkpoint', 'Live result in ActivatePrime (v0.5.1, T7 on USB-C)'],
               ['DeepSeek V4.1 Flash (~510 GB)', '24 tokens in 192.2 s on the first turn (~8.0 s/token); 24 tokens in 227.1 s on the second turn (~9.5 s/token)'],
@@ -546,11 +547,17 @@ def story():
             'so a wrong guess costs drive time and never changes the output. The share of routed experts that were '
             'guessed (recall) is recorded in the run evidence.'),
           H2('Status'),
-          P('Both features are on by default, in frustum_chat and in ActivatePrime. They were verified without a GPU '
-            'as above; speed on the RTX 5060 Ti and prediction recall have not been measured yet. run_fused_check.ps1 '
+          P('First live results in ActivatePrime: Phi-4 produced 62 tokens in 5.7 s (about 0.09 s per token, against '
+            '1.4 to 1.5 s before), a roughly sixteen-fold speed-up from the fused kernels. GLM-4.7-Flash, whose routed '
+            'experts mostly come from the drive in its default placement, produced 94 tokens in 85 s on a second turn '
+            '(about 0.9 s per token, against about 1.1 s before). The first DeepSeek reply with prediction on took '
+            'about seven minutes against about three on v0.5.1, so next-layer prediction is now off by default: the '
+            'drive is the bottleneck and wrong guesses start reading at once, ahead of the reads that are needed. '
+            'Whether prediction caused all of that slowdown has not been isolated. '
+            'Fused kernels stay on by default. run_fused_check.ps1 '
             'times each kernel against the reference on random weights, and run_speed_check.ps1 runs each model '
             'before and after in fresh processes, reporting seconds per token, whether the token ids match and '
-            'DeepSeek’s recall. Results will be added to this section when recorded.'),
+            'DeepSeek’s recall, with prediction off and on. These are single runs from the app.'),
           PageBreak()]
 
     s += [H1('16. Interpretation and limitations'),
@@ -610,7 +617,7 @@ def story():
               ['FRUSTUM_DEEPSEEK_HOST_GIB', 'Host-RAM expert tier size'],
               ['FRUSTUM_GLM_PLACEMENT', 'baseline, split (default) or tiered'],
               ['FRUSTUM_FUSED', '0 turns off the v0.6 fused decode kernels'],
-              ['FRUSTUM_PREDICT_NEXT', 'Next-layer experts to read early per decode layer (default 6, 0 off)'],
+              ['FRUSTUM_PREDICT_NEXT', 'Next-layer experts to read early per decode layer (default 0, off)'],
           ]),
           H2('ActivatePrime'),
           P('ActivatePrime is the Electron chat front end. It keeps one Python worker warm, streams tokens, offers '
