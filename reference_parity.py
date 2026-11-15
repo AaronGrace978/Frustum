@@ -1,4 +1,4 @@
-"""Compare Frusium_loader's next-token distributions with a reference.
+"""Compare Frustum_loader's next-token distributions with a reference.
 
 Why: every correctness check so far compares this implementation with itself
 or with NumPy re-derivations of single pieces. Whether the whole 40-layer
@@ -6,17 +6,17 @@ stack matches the published model is still open. This script measures it.
 
 1. Record what this implementation predicts (GPU needed):
 
-    python frusium_chat.py --prompt "Say hello." --max-new-tokens 12 \
+    python frustum_chat.py --prompt "Say hello." --max-new-tokens 12 \
         --top-logprobs 10 --evidence ours.json
 
 2. Compare with one of:
 
-   another Frusium run (e.g. --legacy, a different placement, another machine):
+   another Frustum run (e.g. --legacy, a different placement, another machine):
 
     python reference_parity.py ours.json --against other.json
 
    a provider that serves the same checkpoint through an OpenAI-compatible API.
-   The key is read from the FRUSIUM_API_KEY environment variable.
+   The key is read from the FRUSTUM_API_KEY environment variable.
 
     python reference_parity.py ours.json --api-base https://host/v1 --api-model NAME
     python reference_parity.py ours.json --api-base https://host/v1 --api-model NAME --endpoint completions
@@ -37,7 +37,7 @@ import os
 from pathlib import Path
 import urllib.request
 
-from frusium_loader import default_model_root
+from frustum_loader import default_model_root
 
 
 def ours_as_text(evidence, tokenizer):
@@ -47,14 +47,14 @@ def ours_as_text(evidence, tokenizer):
                           top={tokenizer.decode([token], skip_special_tokens=False): logprob
                                for token, logprob in step['top']}))
     if not steps:
-        raise SystemExit('Evidence has no top_logprobs. Re-run frusium_chat.py with --top-logprobs K.')
+        raise SystemExit('Evidence has no top_logprobs. Re-run frustum_chat.py with --top-logprobs K.')
     return steps
 
 
 def fetch(args, evidence, count):
-    key = os.environ.get('FRUSIUM_API_KEY')
+    key = os.environ.get('FRUSTUM_API_KEY')
     if not key:
-        raise SystemExit('Set FRUSIUM_API_KEY to call a provider.')
+        raise SystemExit('Set FRUSTUM_API_KEY to call a provider.')
     k = len(evidence['top_logprobs'][0]['top'])
     if args.endpoint == 'chat':
         body = dict(model=args.api_model, messages=[dict(role='user', content=evidence['prompt'])],
@@ -99,7 +99,7 @@ def compare(ours, theirs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('ours', type=Path)
-    parser.add_argument('--against', type=Path, help='Another frusium_chat.py evidence file')
+    parser.add_argument('--against', type=Path, help='Another frustum_chat.py evidence file')
     parser.add_argument('--api-base')
     parser.add_argument('--api-model')
     parser.add_argument('--endpoint', choices=('chat', 'completions'), default='chat')

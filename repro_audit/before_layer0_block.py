@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
-from frusium_loader import Catalog,FrusiumLoader
+from frustum_loader import Catalog,FrustumLoader
 from expert_correctness import activation
 from streamed_moe import StreamedMoE
 from block_primitives import rms_norm,hc_mixes,hc_pre,hc_post
@@ -66,7 +66,7 @@ class LayerZeroBlock:
         self.c=catalog;self.cfg=catalog.config['text_config']
         if self.cfg['compress_ratios'][0]!=0 or 0 in self.cfg['engram_layer_ids']:
             raise ValueError('This baseline only supports layer 0 without compression or Engram')
-        self.dense=FrusiumLoader(catalog,'cuda',256*1024**2)
+        self.dense=FrustumLoader(catalog,'cuda',256*1024**2)
         self.moe=StreamedMoE(catalog,256)
         self.kv=RingKV(self.cfg['sliding_window'])
     def reset(self):self.kv.reset()

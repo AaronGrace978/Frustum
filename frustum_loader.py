@@ -1,4 +1,4 @@
-"""Frusium_loader: bounded safetensors streaming core (catalog, reader, byte cache).
+"""Frustum_loader: bounded safetensors streaming core (catalog, reader, byte cache).
 Default inspect reads JSON/headers only. No model source is imported or executed.
 """
 from __future__ import annotations
@@ -19,8 +19,8 @@ import unittest
 
 
 def default_model_root():
-    """FRUSIUM_MODEL if set, otherwise the folder that contains this project."""
-    return os.environ.get('FRUSIUM_MODEL') or str(Path(__file__).resolve().parent.parent)
+    """FRUSTUM_MODEL if set, otherwise the folder that contains this project."""
+    return os.environ.get('FRUSTUM_MODEL') or str(Path(__file__).resolve().parent.parent)
 
 @dataclass(frozen=True)
 class TensorRange:
@@ -92,7 +92,7 @@ class RangeReader:
     every tensor. Cold pages then arrive through page faults, a few dozen KiB
     per request, which is slow on USB storage. This version keeps one handle
     per (thread, shard) and issues large sequential read calls straight into
-    the destination buffer. mode='mmap' (or FRUSIUM_READER=mmap in the
+    the destination buffer. mode='mmap' (or FRUSTUM_READER=mmap in the
     environment) selects the old path for A/B runs.
 
     Thread-safe: every thread owns its handles. bytes_read counts logical
@@ -102,7 +102,7 @@ class RangeReader:
     MAX_HANDLES = 12  # per thread; a Windows process defaults to 512 CRT handles
 
     def __init__(self, chunk_bytes=8*1024*1024, mode=None, access='sequential'):
-        mode = mode or os.environ.get('FRUSIUM_READER', 'direct')
+        mode = mode or os.environ.get('FRUSTUM_READER', 'direct')
         if chunk_bytes <= 0:
             raise ValueError('chunk_bytes must be positive')
         if mode not in ('direct', 'mmap') or access not in ('sequential', 'random'):
@@ -211,7 +211,7 @@ class RangeReader:
         except Exception:
             pass
 
-class FrusiumLoader:
+class FrustumLoader:
     """Byte cache with leased entries and one bounded staging buffer.
 
     Single-threaded. Each tensor is read from disk straight into a page-locked
@@ -357,7 +357,7 @@ class PrototypeTests(unittest.TestCase):
             reader.read(item)
         reader.close()
     def test_cache_and_leases(self):
-        loader = FrusiumLoader(self.catalog,budget_bytes=32,chunk_bytes=3)
+        loader = FrustumLoader(self.catalog,budget_bytes=32,chunk_bytes=3)
         with loader.acquire('a') as a:
             self.assertEqual(a.tolist(),list(range(16)))
             with loader.acquire('b'):
@@ -371,7 +371,7 @@ class PrototypeTests(unittest.TestCase):
         self.assertLessEqual(loader.peak,32)
         loader.close()
     def test_oversized_rejected_before_read(self):
-        loader = FrusiumLoader(self.catalog,budget_bytes=8,chunk_bytes=3)
+        loader = FrustumLoader(self.catalog,budget_bytes=8,chunk_bytes=3)
         with self.assertRaises(ValueError):
             with loader.acquire('a'): pass
         self.assertEqual(loader.reader.bytes_read,0)
@@ -474,7 +474,7 @@ def main():
     if args.rounds<1: p.error('--rounds must be positive')
     for name in args.tensor:
         if name not in catalog.tensors: p.error('Unknown tensor: '+name)
-    loader=FrusiumLoader(catalog,args.device,args.budget_mib*1024**2,args.chunk_mib*1024**2)
+    loader=FrustumLoader(catalog,args.device,args.budget_mib*1024**2,args.chunk_mib*1024**2)
     start=time.perf_counter()
     try:
         for _ in range(args.rounds):

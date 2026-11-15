@@ -1,4 +1,4 @@
-"""GLM-4.7-Flash GGUF smoke test using Frusium's bounded reader and CUDA PyTorch."""
+"""GLM-4.7-Flash GGUF smoke test using Frustum's bounded reader and CUDA PyTorch."""
 import argparse
 import ctypes
 import os
@@ -13,7 +13,7 @@ import torch
 import torch.nn.functional as F
 
 from expert_cache import TieredExpertCache
-from frusium_loader import TensorRange
+from frustum_loader import TensorRange
 from phi4_chat import unpack
 
 GIB = 2**30

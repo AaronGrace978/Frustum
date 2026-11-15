@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import unittest
 
 from cache_policy import Frequency, Tier, simulate
-from frusium_loader import Catalog, PrototypeTests, default_model_root  # noqa: F401  (tests collected below)
+from frustum_loader import Catalog, PrototypeTests, default_model_root  # noqa: F401  (tests collected below)
 from generation import chat_prompt, drive, reusable_prefix
 import placement
 

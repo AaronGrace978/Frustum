@@ -4,7 +4,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 import json
 import time
-from frusium_loader import Catalog, RangeReader
+from frustum_loader import Catalog, RangeReader
 
 GIB = 1024**3
 MIB = 1024**2

@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
-from frusium_loader import Catalog, FrusiumLoader, default_model_root
+from frustum_loader import Catalog, FrustumLoader, default_model_root
 from expert_cache import TieredExpertCache
 
 GIB = 1024**3
@@ -72,7 +72,7 @@ class StreamedMoE:
         self.cfg=catalog.config['text_config']
         if self.cfg['scoring_func']!='sqrtsoftplus' or self.cfg['n_shared_experts']!=1:
             raise ValueError('Unsupported MoE configuration')
-        self.router=FrusiumLoader(catalog,'cuda',router_cache_mib*MIB)
+        self.router=FrustumLoader(catalog,'cuda',router_cache_mib*MIB)
         pinned=(lambda key:key[1]=='shared') if pin_shared else None
         self.cache=TieredExpertCache(torch,catalog,torch.device('cuda:0'),cache_mib*MIB,host_cache_mib*MIB,
             io_threads=io_threads,gpu_policy=gpu_policy,host_policy=host_policy,pinned=pinned,

@@ -3,5 +3,5 @@ __pycache__/
 .venv*/
 verify_runs/
 backup_v0.4/
-frusium_snapshot.tar
+frustum_snapshot.tar
 *.tar

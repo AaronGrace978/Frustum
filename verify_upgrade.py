@@ -4,7 +4,7 @@ Run with the CUDA Python environment (or .\\run_verify.ps1):
 
     python verify_upgrade.py            # everything
     python verify_upgrade.py --skip chat
-    python verify_upgrade.py --host-cache-gib 0   # unknown options go to frusium_chat.py
+    python verify_upgrade.py --host-cache-gib 0   # unknown options go to frustum_chat.py
 
 Steps
   selftest  hardware-free unit tests (loader, caches, placement, generation flow)
@@ -41,7 +41,7 @@ def run(command, log):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--model', help='Checkpoint folder. Default: FRUSIUM_MODEL or the parent folder')
+    parser.add_argument('--model', help='Checkpoint folder. Default: FRUSTUM_MODEL or the parent folder')
     parser.add_argument('--skip', nargs='*', default=[], choices=('selftest', 'io', 'layer0', 'chat'))
     args, chat_options = parser.parse_known_args()
     folder = HERE / 'verify_runs' / time.strftime('%Y%m%d_%H%M%S')
@@ -59,7 +59,7 @@ def main():
         record('selftest', status='PASS' if code == 0 else 'FAIL', seconds=seconds)
 
     if 'io' not in args.skip:
-        code, seconds = run([python, 'frusium_loader.py', *model, 'bench-io'], folder / 'io.log')
+        code, seconds = run([python, 'frustum_loader.py', *model, 'bench-io'], folder / 'io.log')
         fields = dict(status='DONE' if code == 0 else 'FAIL', seconds=seconds)
         if code == 0:
             text = (folder / 'io.log').read_text(encoding='utf-8')
@@ -94,7 +94,7 @@ def main():
     if 'chat' not in args.skip:
         output = folder / 'chat.json'
         extra = [option for option in chat_options if option != '--']
-        code, seconds = run([python, 'frusium_chat.py', *model, '--prompt', 'Say hello.', '--max-new-tokens', '6',
+        code, seconds = run([python, 'frustum_chat.py', *model, '--prompt', 'Say hello.', '--max-new-tokens', '6',
                              '--evidence', output, *extra], folder / 'chat.log')
         fields = dict(status='FAIL', seconds=seconds)
         saved = HERE / 'chat_resident_head_results.json'

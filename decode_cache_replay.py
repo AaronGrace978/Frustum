@@ -1,6 +1,6 @@
 """Replay recorded routing through the cache policies to estimate disk reads per token.
 
-Input is an evidence file written by `frusium_chat.py --profile-decode`. Every
+Input is an evidence file written by `frustum_chat.py --profile-decode`. Every
 profiled step (decode or reuse_feed) contributes one pass. The more passes the
 profile holds, the more the comparison means: two passes say little about
 which policy wins.
@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 
 from cache_policy import simulate
-from frusium_loader import Catalog, default_model_root
+from frustum_loader import Catalog, default_model_root
 
 
 def requests(catalog, step):

@@ -2,7 +2,7 @@ import hashlib,json,sys,platform
 from pathlib import Path
 import torch
 from layer0_block import LayerZeroBlock
-from frusium_loader import Catalog
+from frustum_loader import Catalog
 from sparse_rows import SparseRows
 from streamed_moe import route
 
@@ -31,6 +31,6 @@ def main():
  try:b.forward(h)
  finally:b.close()
  trace['torch']=torch.__version__;trace['python']=sys.version
- trace['code_hashes']={n:hashlib.sha256(Path(n).read_bytes()).hexdigest() for n in ['frusium_loader.py','layer0_block.py','block_primitives.py','sparse_rows.py','streamed_moe.py']}
+ trace['code_hashes']={n:hashlib.sha256(Path(n).read_bytes()).hexdigest() for n in ['frustum_loader.py','layer0_block.py','block_primitives.py','sparse_rows.py','streamed_moe.py']}
  Path(sys.argv[1]).write_text(json.dumps(trace,indent=2));print(json.dumps({'ids':trace['ids'],'output':sys.argv[1]}))
 main()

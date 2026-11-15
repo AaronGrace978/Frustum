@@ -140,9 +140,9 @@ if phi_edition:
     phi_record_name = 'phi4_chat_results.json'
     phi = json.loads((root.parent / phi_record_name).read_text(encoding='utf-8'))
     pages.append({
-        'title': '12. Phi-4 on Frusium_loader',
+        'title': '12. Phi-4 on Frustum_loader',
         'body': [
-            ('p', 'Frusium_loader loaded Microsoft Phi-4 14B Q4_K_S GGUF into GPU memory in packed form and ran all 40 layers in PyTorch on an RTX 5060 Ti (16 GB).'),
+            ('p', 'Frustum_loader loaded Microsoft Phi-4 14B Q4_K_S GGUF into GPU memory in packed form and ran all 40 layers in PyTorch on an RTX 5060 Ti (16 GB).'),
             ('h', 'Prompt'),
             ('transcript', phi['prompt']),
             ('h', 'Model reply'),
@@ -162,9 +162,9 @@ if glm_edition:
     glm_record_name = 'glm_chat_results.json'
     glm = json.loads((root.parent / glm_record_name).read_text(encoding='utf-8'))
     pages.append({
-        'title': '13. GLM-4.7-Flash on Frusium_loader',
+        'title': '13. GLM-4.7-Flash on Frustum_loader',
         'body': [
-            ('p', 'The GLM backend executed all 47 layers using Frusium_loader’s bounded reader and PyTorch CUDA. It loaded routed quantized expert slices on demand.'),
+            ('p', 'The GLM backend executed all 47 layers using Frustum_loader’s bounded reader and PyTorch CUDA. It loaded routed quantized expert slices on demand.'),
             ('h', 'Prompt'),
             ('transcript', glm['prompt']),
             ('h', 'Model reply'),
@@ -264,15 +264,15 @@ for idx,page in enumerate(pages):
         else:story.append(Paragraph(html.escape(text),styles[kind]))
 def frame(canvas,doc):
     canvas.setStrokeColor(colors.HexColor('#087D89'));canvas.setLineWidth(2);canvas.line(54,753,558,753)
-    canvas.setFont('Body',8);canvas.setFillColor(colors.HexColor('#64748B'));canvas.drawString(54,766,'FRUSIUM_LOADER / EXPERIMENTAL WHITEPAPER')
+    canvas.setFont('Body',8);canvas.setFillColor(colors.HexColor('#64748B'));canvas.drawString(54,766,'FRUSTUM_LOADER / EXPERIMENTAL WHITEPAPER')
     footer = f'Version {version} | November 14, 2026 | Sequential validation' if new_edition else 'Version 0.2 | November 13, 2026 | Component-level validation'
     canvas.drawString(54,30,footer)
     canvas.drawRightString(558,30,str(doc.page))
-output = root / f'Frusium_loader_whitepaper_v{version if new_edition else "0.2"}.pdf'
+output = root / f'Frustum_loader_whitepaper_v{version if new_edition else "0.2"}.pdf'
 if current_edition:
-    output = root / 'Frusium_loader_Whitepaper.pdf'
+    output = root / 'Frustum_loader_Whitepaper.pdf'
 destination = BytesIO() if evidence_edition else str(output)
-SimpleDocTemplate(destination,pagesize=(612,792),leftMargin=54,rightMargin=54,topMargin=61,bottomMargin=52,title='Frusium_loader: Bounded Working-Set Execution',author='Aaron Grace; implementation assistance by ChatGPT').build(story,onFirstPage=frame,onLaterPages=frame)
+SimpleDocTemplate(destination,pagesize=(612,792),leftMargin=54,rightMargin=54,topMargin=61,bottomMargin=52,title='Frustum_loader: Bounded Working-Set Execution',author='Aaron Grace; implementation assistance by ChatGPT').build(story,onFirstPage=frame,onLaterPages=frame)
 if evidence_edition:
     writer = PdfWriter(clone_from=PdfReader(destination))
     for name, data in attachments.items():

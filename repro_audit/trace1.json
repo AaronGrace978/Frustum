@@ -76,7 +76,7 @@
   "torch": "2.11.0+cu128",
   "python": "3.13.15 (main, Aug 25 2026, 14:00:51) [MSC v.1944 64 bit (AMD64)]",
   "code_hashes": {
-    "frusium_loader.py": "355d1b734a9b1485ad1d75c3feceda09d59ad16315f39888b7626404cb6cc093",
+    "frustum_loader.py": "355d1b734a9b1485ad1d75c3feceda09d59ad16315f39888b7626404cb6cc093",
     "layer0_block.py": "0efbdae30171c9a8ac1b0ce180958c35121052f00a27f283b36788c31723b3be",
     "block_primitives.py": "e7c3b926dd33ce4b24d749c9aa20d58aad223312b2acebb2982a2165db139618",
     "sparse_rows.py": "aaceb34a84d37ae9dd2809205c382fafebc33109e7dac50e228f8297b6ea38e4",

@@ -29,7 +29,7 @@ import time
 import torch
 from tokenizers import Tokenizer
 
-from frusium_loader import Catalog, default_model_root
+from frustum_loader import Catalog, default_model_root
 from layers0_3_block import GIB, SequentialBlocks
 import placement
 

@@ -1,4 +1,4 @@
-"""Phi-4 GGUF backend for Frusium_loader, using packed GPU weights and PyTorch."""
+"""Phi-4 GGUF backend for Frustum_loader, using packed GPU weights and PyTorch."""
 import argparse
 import json
 from pathlib import Path
@@ -10,7 +10,7 @@ from tokenizers import Tokenizer
 import torch
 import torch.nn.functional as F
 
-from frusium_loader import RangeReader, TensorRange
+from frustum_loader import RangeReader, TensorRange
 
 GIB = 1024**3
 

@@ -1,4 +1,4 @@
-# Frusium_loader
+# Frustum_loader
 
 Streaming inference for checkpoints far larger than GPU memory. The reference target is DeepSeek-V4.1-Flash (about 510 GB on disk) on one 16 GB GPU, read from an external SSD.
 
@@ -10,13 +10,13 @@ Current code: v0.5.1. Live benchmarks from a first test session are below. The n
     .\run_chat.ps1                        # interactive chat
     .\run_chat.ps1 --prompt "Say hello." --max-new-tokens 6
 
-The launchers look for Python in this order: `FRUSIUM_PYTHON`, `.venv\Scripts\python.exe` in this folder, then the original Codex environment. To set up a fresh machine:
+The launchers look for Python in this order: `FRUSTUM_PYTHON`, `.venv\Scripts\python.exe` in this folder, then the original Codex environment. To set up a fresh machine:
 
     py -3.13 -m venv .venv
     .venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu128
     .venv\Scripts\pip install -r requirements.txt
 
-The model folder defaults to the parent of this folder. Set `FRUSIUM_MODEL` or pass `--model` to point elsewhere. Weights and the CUDA environment are not bundled.
+The model folder defaults to the parent of this folder. Set `FRUSTUM_MODEL` or pass `--model` to point elsewhere. Weights and the CUDA environment are not bundled.
 
 ## What v0.5 changed
 
@@ -32,7 +32,7 @@ The v0.4 decode profile showed where a token's 58 seconds went: 2.3 GB of routed
 | Dense FP8 decode | Three full-size FP32 temporaries | One, same products |
 | Follow-up turns | Whole conversation re-prefilled | Processed prefix reused when the token ids match exactly |
 | Output | Printed at the end, greedy only | Streamed; optional temperature, top-k, top-p |
-| Launchers | Hard-coded interpreter path | `FRUSIUM_PYTHON` / local `.venv` / original path |
+| Launchers | Hard-coded interpreter path | `FRUSTUM_PYTHON` / local `.venv` / original path |
 
 `--legacy` on `run_chat.ps1` restores the v0.4 placement and the mmap reader for a same-day A/B run.
 
@@ -64,7 +64,7 @@ Cold load + 36-token reply: 53.8 s (~1.5 s per token). Generation speed matches 
 
 Previous estimate with v0.4 at USB 2.0 speed: ~58 s per token. The USB-C link and the v0.5 tiered expert cache together deliver a **7× speedup**. The second turn is slightly slower because the growing conversation increases prefill work (prefix reuse still skips the already-fed tokens). With the LFU cache retaining frequently-used experts (~57% repeat rate between consecutive tokens), subsequent turns in a longer conversation should see further improvement as the working set stabilises.
 
-These are first-session numbers from ActivatePrime 0.1.1 running Frusium v0.5.1. Formal verify and parity runs have not been done yet.
+These are first-session numbers from ActivatePrime 0.1.1 running Frustum v0.5.1. Formal verify and parity runs have not been done yet.
 
 Two things from the earlier plan were deliberately not built:
 
@@ -106,7 +106,7 @@ In chat: `/reset` clears the conversation, `/stats` prints cache counters, `/qui
 1. `selftest.py`: 28 unit tests on a synthetic checkpoint, including the chat template against DeepSeek's own encoder. No GPU or weights.
 2. `bench-io`: the drive check above.
 3. `layer0_block.py`: the layer-0 output hash, routing and stage fingerprints must equal `repro_baseline.json`, recorded with v0.4. This is the proof that v0.5 did not change arithmetic.
-4. `frusium_chat.py --prompt "Say hello."` for six tokens: token ids must equal the saved v0.4 run, and the timings are listed beside it.
+4. `frustum_chat.py --prompt "Say hello."` for six tokens: token ids must equal the saved v0.4 run, and the timings are listed beside it.
 
 `run_repro_test.ps1` will report `same_source: false` against the old baseline because the sources changed. The other checks in it should still pass.
 
@@ -117,7 +117,7 @@ Each change is its own commit, so a failure can be localised:
     git log --oneline
     git revert <commit>        # undo one change and re-run verify
 
-Two switches do the same without touching history: `FRUSIUM_ATTENTION=loop` restores the original attention loop for prefill, and `--legacy` restores the v0.4 placement and reader.
+Two switches do the same without touching history: `FRUSTUM_ATTENTION=loop` restores the original attention loop for prefill, and `--legacy` restores the v0.4 placement and reader.
 
 ## What v0.5.1 added
 
@@ -133,7 +133,7 @@ Two switches do the same without touching history: `FRUSIUM_ATTENTION=loop` rest
 
 ## Is the output right?
 
-Agreement so far is this implementation against itself and against NumPy re-derivations of single components. Whether all 40 layers match the published model is open. `reference_parity.py` measures it against a provider serving the same checkpoint, or against another Frusium run:
+Agreement so far is this implementation against itself and against NumPy re-derivations of single components. Whether all 40 layers match the published model is open. `reference_parity.py` measures it against a provider serving the same checkpoint, or against another Frustum run:
 
     .\run_chat.ps1 --prompt "Say hello." --max-new-tokens 12 --top-logprobs 10 --evidence ours.json
     .\run_parity.ps1 ours.json --api-base https://host/v1 --api-model NAME --endpoint completions
@@ -148,13 +148,13 @@ See the script header for caveats about chat templates and provider quantization
 
 | File | Role |
 |---|---|
-| `frusium_loader.py` | Header-only catalog, `RangeReader`, `FrusiumLoader` byte cache, `bench-io` |
+| `frustum_loader.py` | Header-only catalog, `RangeReader`, `FrustumLoader` byte cache, `bench-io` |
 | `cache_policy.py` | Frequency ranking, tier bookkeeping, replay simulator (no torch) |
 | `expert_cache.py` | GPU + host tiers and threaded reads for routed experts |
 | `placement.py` | What stays resident, from checkpoint metadata |
 | `generation.py` | Chat template and prefill / reuse / decode control flow (no torch) |
 | `streamed_moe.py`, `layers0_3_block.py`, `layer0_block.py`, `block_primitives.py`, `sparse_rows.py`, `expert_correctness.py` | Model arithmetic and its tests |
-| `frusium_chat.py` | Chat runner |
+| `frustum_chat.py` | Chat runner |
 | `decode_cache_replay.py` | Replay recorded routing through cache policies and tier sizes |
 | `verify_upgrade.py`, `selftest.py`, `long_context_check.py`, `reference_parity.py`, `baseline_llamacpp.py` | Verification |
 | `benchmark_layers.py` | Original synthetic transfer benchmark, kept with its v0 cache |
@@ -168,7 +168,7 @@ Everything below was written for, and measured with, the earlier code. Sentences
 ## v0.4 prototype notes
 
 GPU: NVIDIA RTX 5060 Ti 16 GB. Validated with Python 3.13 and torch 2.11.0+cu128.
-Working folder: G:\Models\DeepSeek-V4.1-Flash\Frusium_loader
+Working folder: G:\Models\DeepSeek-V4.1-Flash\Frustum_loader
 
 ## Run
 
@@ -191,7 +191,7 @@ The launchers select the isolated CUDA interpreter installed under the Codex wor
 
 ## What is implemented
 
-- Header-only safetensors catalog and bounded mmap range reader (frusium_loader.py).
+- Header-only safetensors catalog and bounded mmap range reader (frustum_loader.py).
 - Byte-budgeted GPU LRU and two pinned 8 MiB host staging buffers, copy stream, compute stream, and CUDA event lifetime guards (benchmark_layers.py).
 - Real MXFP4 expert: three projections, FP8 activation quantization, BF16 rounding, and model-specific SwiGLU clamps (expert_correctness.py).
 - Text router using actual BF16 router weights, sqrt(softplus) scores, correction bias for selection, six experts, normalized/scaled unbiased mixture weights (streamed_moe.py).
@@ -252,7 +252,7 @@ The seven-page whitepaper in whitepaper/ is frozen at version 0.1 before this mi
 
 `benchmark_glm_placement.py --evidence glm_placement_repeat.json` compares a unified GPU LRU, separate GPU budgets for always-used and routed expert weights, and the split GPU cache with a bounded host RAM tier. Run it with the same CUDA Python environment as the chat tests. The total GPU weight budget stays fixed across policies. The benchmark checks the saved Dino Buddies answer token for token and compares a cached follow-up with a full re-prefill of the same conversation.
 
-An empty application cache does not imply an empty Windows file cache. File bytes and read time here come from Frusium's bounded reader. Upload timing is host wall time for blocking copies and can include CUDA synchronization. The RAM budget counts retained payload bytes, not overall host memory usage.
+An empty application cache does not imply an empty Windows file cache. File bytes and read time here come from Frustum's bounded reader. Upload timing is host wall time for blocking copies and can include CUDA synchronization. The RAM budget counts retained payload bytes, not overall host memory usage.
 
 The first comparison is saved in `glm_placement_results.json`. All three modes reproduced the saved Dino reply. In the split mode, a warm first token took 9.80 s and a follow-up with 34 cached prompt tokens took 5.33 s to its first token, versus 11.72 s with a full rebuild. The RAM tier reduced logical file reads, but its warm latency was higher in this run. See the per-turn counters for the other policies.
 
@@ -260,7 +260,7 @@ A reverse-order repeat in `glm_placement_reverse_results.json` measured 10.27 s 
 
 ### Phi-4 smoke test
 
-Run `.\run_phi4_test.ps1 --max-new-tokens 24` with Microsoft's `phi-4-Q4_K_S.gguf` and Phi-4 `tokenizer.json` in `G:\Models\Phi-4`. This backend uses Frusium_loader's bounded reader, keeps the packed weights on the GPU, and runs the Phi-4 forward pass and KV cache in PyTorch. It uses the `gguf` package for metadata and reference dequantization. The saved `phi4_chat_results.json` records the first 40-layer smoke test. Sampled quantization checks and finite logits passed. Full-model numerical parity remains open.
+Run `.\run_phi4_test.ps1 --max-new-tokens 24` with Microsoft's `phi-4-Q4_K_S.gguf` and Phi-4 `tokenizer.json` in `G:\Models\Phi-4`. This backend uses Frustum_loader's bounded reader, keeps the packed weights on the GPU, and runs the Phi-4 forward pass and KV cache in PyTorch. It uses the `gguf` package for metadata and reference dequantization. The saved `phi4_chat_results.json` records the first 40-layer smoke test. Sampled quantization checks and finite logits passed. Full-model numerical parity remains open.
 
 ### Profile cached decode
 

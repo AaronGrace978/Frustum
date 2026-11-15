@@ -2,7 +2,7 @@
   "status": "PASS",
   "provenance": {
     "python": "3.13.15 (main, Aug 25 2026, 14:00:51) [MSC v.1944 64 bit (AMD64)]",
-    "executable": "C:\\Users\\AGrac\\Documents\\Codex\\2026-11-13\\new-chat-3\\Frusium_loader\\.venv-cuda\\Scripts\\python.exe",
+    "executable": "C:\\Users\\AGrac\\Documents\\Codex\\2026-11-13\\new-chat-3\\Frustum_loader\\.venv-cuda\\Scripts\\python.exe",
     "platform": "Windows-11-10.0.26300-SP0",
     "torch": "2.11.0+cu128",
     "cuda_runtime": "12.8",
@@ -19,7 +19,7 @@
       "PYTORCH_ALLOC_CONF": null
     },
     "source_sha256": {
-      "frusium_loader.py": "48c034ac70f46c60b8c30954151a544bea0e5730a8dd6d8e90ef12b02fac2501",
+      "frustum_loader.py": "48c034ac70f46c60b8c30954151a544bea0e5730a8dd6d8e90ef12b02fac2501",
       "benchmark_layers.py": "2e714009f6b2dc9403eccbe3caac31541e09030bc584550eeaa796e87a8ed74d",
       "expert_correctness.py": "c10f3e2412f6841e179ccbae0b379cc6d7eb0c0428bee48d7f08ec36fad80a77",
       "streamed_moe.py": "4be133a4216174da8a29bc79bfccb5894198f0298aa7fcba0574aa1ce757b422",

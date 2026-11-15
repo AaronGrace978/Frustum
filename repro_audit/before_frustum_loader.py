@@ -1,4 +1,4 @@
-"""Frusium_loader: bounded safetensors streaming prototype, not an inference engine.
+"""Frustum_loader: bounded safetensors streaming prototype, not an inference engine.
 Default inspect reads JSON/headers only. No model source is imported or executed.
 """
 from __future__ import annotations
@@ -103,7 +103,7 @@ class RangeReader:
                         view.release()
                 self.bytes_read += size
 
-class FrusiumLoader:
+class FrustumLoader:
     """Single-threaded byte cache with leased entries and bounded staging.
     CUDA copies use a dedicated stream but synchronize each chunk before reuse.
     v0 prioritizes correctness; double-buffer overlap is intentionally deferred.
@@ -219,7 +219,7 @@ class PrototypeTests(unittest.TestCase):
         self.assertEqual(out,bytes(range(16,32)))
         self.assertEqual(reader.bytes_read,16)
     def test_cache_and_leases(self):
-        loader = FrusiumLoader(self.catalog,budget_bytes=32,chunk_bytes=3)
+        loader = FrustumLoader(self.catalog,budget_bytes=32,chunk_bytes=3)
         with loader.acquire('a') as a:
             self.assertEqual(a.tolist(),list(range(16)))
             with loader.acquire('b'):
@@ -233,7 +233,7 @@ class PrototypeTests(unittest.TestCase):
         self.assertLessEqual(loader.peak,32)
         loader.close()
     def test_oversized_rejected_before_read(self):
-        loader = FrusiumLoader(self.catalog,budget_bytes=8,chunk_bytes=3)
+        loader = FrustumLoader(self.catalog,budget_bytes=8,chunk_bytes=3)
         with self.assertRaises(ValueError):
             with loader.acquire('a'): pass
         self.assertEqual(loader.reader.bytes_read,0)
@@ -269,7 +269,7 @@ def main():
     if args.rounds<1: p.error('--rounds must be positive')
     for name in args.tensor:
         if name not in catalog.tensors: p.error('Unknown tensor: '+name)
-    loader=FrusiumLoader(catalog,args.device,args.budget_mib*1024**2,args.chunk_mib*1024**2)
+    loader=FrustumLoader(catalog,args.device,args.budget_mib*1024**2,args.chunk_mib*1024**2)
     start=time.perf_counter()
     try:
         for _ in range(args.rounds):

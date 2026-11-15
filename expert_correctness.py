@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
-from frusium_loader import Catalog, FrusiumLoader
+from frustum_loader import Catalog, FrustumLoader
 
 GIB=1024**3
 
@@ -101,7 +101,7 @@ def main():
     cfg=catalog.config['text_config']
     if not 0<=args.layer<cfg['num_hidden_layers'] or not 0<=args.expert<cfg['n_routed_experts']:
         raise ValueError('Invalid layer or expert')
-    loader=FrusiumLoader(catalog,'cuda',64*1024**2)
+    loader=FrustumLoader(catalog,'cuda',64*1024**2)
     torch.manual_seed(args.seed)
     x_cpu=torch.randn(3,cfg['hidden_size'],dtype=torch.float32).to(torch.bfloat16)
     # Zero, typical, large activations exercise quantization and clamps.

@@ -1,13 +1,13 @@
-"""Measure the same GGUF with llama.cpp and set it beside Frusium's saved numbers.
+"""Measure the same GGUF with llama.cpp and set it beside Frustum's saved numbers.
 
 Phi-4 and GLM-4.7-Flash both fit on a 16 GB card, so llama.cpp is the baseline
 any reader will compare against. This runs llama-bench (from a llama.cpp
 release with CUDA support) and reports tokens per second for both.
 
     python baseline_llamacpp.py --llama-bench C:\\path\\to\\llama-bench.exe \
-        --gguf G:\\Models\\Phi-4\\phi-4-Q4_K_S.gguf --frusium phi4_chat_results.json
+        --gguf G:\\Models\\Phi-4\\phi-4-Q4_K_S.gguf --frustum phi4_chat_results.json
 
-No GPU code of this project runs here; nothing is loaded by Frusium_loader.
+No GPU code of this project runs here; nothing is loaded by Frustum_loader.
 """
 import argparse
 import json
@@ -20,7 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--gguf', type=Path, required=True)
     parser.add_argument('--llama-bench', default=shutil.which('llama-bench') or 'llama-bench')
-    parser.add_argument('--frusium', type=Path, help='Saved Frusium run for the same model (has decode_seconds)')
+    parser.add_argument('--frustum', type=Path, help='Saved Frustum run for the same model (has decode_seconds)')
     parser.add_argument('--gpu-layers', type=int, default=99)
     parser.add_argument('--prompt-tokens', type=int, default=64)
     parser.add_argument('--gen-tokens', type=int, default=64)
@@ -50,14 +50,14 @@ def main():
         report['llamacpp_generation_tokens_per_second'] = generation[0]['avg_ts']
     if prompt:
         report['llamacpp_prompt_tokens_per_second'] = prompt[0]['avg_ts']
-    if args.frusium:
-        saved = json.loads(args.frusium.read_text(encoding='utf-8'))
+    if args.frustum:
+        saved = json.loads(args.frustum.read_text(encoding='utf-8'))
         steps = saved.get('decode_seconds') or []
         if steps:
-            report['frusium_generation_tokens_per_second'] = len(steps) / sum(steps)
-            report['frusium_source'] = str(args.frusium)
+            report['frustum_generation_tokens_per_second'] = len(steps) / sum(steps)
+            report['frustum_source'] = str(args.frustum)
         if generation and steps:
-            report['llamacpp_over_frusium'] = report['llamacpp_generation_tokens_per_second'] / report['frusium_generation_tokens_per_second']
+            report['llamacpp_over_frustum'] = report['llamacpp_generation_tokens_per_second'] / report['frustum_generation_tokens_per_second']
     report['note'] = ('Different prompts and token counts; a throughput comparison, not an output comparison. '
                       'If the expected fields are missing, read llama_bench_runs directly.')
     print(json.dumps(report, indent=2))

@@ -1,6 +1,6 @@
 [
   {
-    "title": "Frusium_loader",
+    "title": "Frustum_loader",
     "subtitle": "A bounded working-set prototype for SSD-backed mixture-of-experts execution",
     "body": [
       [
@@ -17,7 +17,7 @@
       ],
       [
         "p",
-        "Frusium_loader investigates whether a large, sparsely activated model can be executed by moving only the immediately needed weights from an external SSD into a small GPU working set. The motivating analogy is spatial streaming in games: retain nearby resources, fetch upcoming resources, and retire completed ones. Here the working set is defined by the model’s computation and router decisions, rather than by a camera. The analogy is conceptual; no claim is made about a particular game’s implementation."
+        "Frustum_loader investigates whether a large, sparsely activated model can be executed by moving only the immediately needed weights from an external SSD into a small GPU working set. The motivating analogy is spatial streaming in games: retain nearby resources, fetch upcoming resources, and retire completed ones. Here the working set is defined by the model’s computation and router decisions, rather than by a camera. The analogy is conceptual; no claim is made about a particular game’s implementation."
       ],
       [
         "p",
@@ -317,7 +317,7 @@
       ],
       [
         "p",
-        "On-demand flash-backed model execution is not a new general concept. LLM in a flash studies memory-limited inference and reducing transfer volume through reuse and storage-aware access. [W3] Frusium_loader currently contributes a specific experimental implementation and reproducibility record for this local mixed-format checkpoint and consumer-GPU setup. No novelty, priority, or comparative speedup claim is established by these tests."
+        "On-demand flash-backed model execution is not a new general concept. LLM in a flash studies memory-limited inference and reducing transfer volume through reuse and storage-aware access. [W3] Frustum_loader currently contributes a specific experimental implementation and reproducibility record for this local mixed-format checkpoint and consumer-GPU setup. No novelty, priority, or comparative speedup claim is established by these tests."
       ]
     ]
   },
@@ -330,7 +330,7 @@
       ],
       [
         "code",
-        "cd G:\\Models\\DeepSeek-V4.1-Flash\\Frusium_loader\n.\\run_expert_test.ps1\n.\\run_moe_test.ps1\n.\\run_sparse_rows_test.ps1\n.\\run_block_primitives_test.ps1\n.\\run_benchmark.ps1 --cache-mib 256"
+        "cd G:\\Models\\DeepSeek-V4.1-Flash\\Frustum_loader\n.\\run_expert_test.ps1\n.\\run_moe_test.ps1\n.\\run_sparse_rows_test.ps1\n.\\run_block_primitives_test.ps1\n.\\run_benchmark.ps1 --cache-mib 256"
       ],
       [
         "p",

@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "frusium-loader"
+name = "frustum-loader"
 version = "0.5.1"
 description = "Bounded-memory streaming inference for checkpoints far larger than GPU memory"
 readme = "README.md"
@@ -16,13 +16,13 @@ dependencies = ["torch>=2.6", "numpy", "tokenizers"]
 gguf = ["gguf>=0.19"]
 
 [project.scripts]
-frusium-chat = "frusium_chat:main"
-frusium-inspect = "frusium_loader:main"
+frustum-chat = "frustum_chat:main"
+frustum-inspect = "frustum_loader:main"
 
 [tool.setuptools]
 py-modules = [
-    "frusium_loader", "cache_policy", "expert_cache", "placement", "generation",
-    "frusium_chat", "streamed_moe", "layers0_3_block", "layer0_block", "block_primitives",
+    "frustum_loader", "cache_policy", "expert_cache", "placement", "generation",
+    "frustum_chat", "streamed_moe", "layers0_3_block", "layer0_block", "block_primitives",
     "expert_correctness", "sparse_rows", "reproducibility", "decode_cache_replay",
     "reference_parity", "verify_upgrade", "selftest", "long_context_check", "glm_chat", "phi4_chat",
 ]

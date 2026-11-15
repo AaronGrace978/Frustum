@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
-from frusium_loader import Catalog,FrusiumLoader
+from frustum_loader import Catalog,FrustumLoader
 
 
 def rms_norm(x,weight,eps):
@@ -44,7 +44,7 @@ def main():
     torch.cuda.set_per_process_memory_fraction(min(1,12*1024**3/total))
     torch.backends.cuda.matmul.allow_tf32=False
     c=Catalog(r'G:\Models\DeepSeek-V4.1-Flash');cfg=c.config['text_config']
-    loader=FrusiumLoader(c,'cuda',32*1024**2)
+    loader=FrustumLoader(c,'cuda',32*1024**2)
     def get(name):
         item=c.tensors[name]
         with loader.acquire(name) as raw:

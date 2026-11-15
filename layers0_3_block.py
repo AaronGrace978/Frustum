@@ -18,7 +18,7 @@ import torch.nn.functional as F
 
 from block_primitives import hc_mixes, hc_post, hc_pre, rms_norm
 from expert_correctness import activation
-from frusium_loader import Catalog, FrusiumLoader, default_model_root
+from frustum_loader import Catalog, FrustumLoader, default_model_root
 from layer0_block import RingKV
 from reproducibility import cache_sha256, tensor_sha256
 from sparse_rows import SparseRows
@@ -94,10 +94,10 @@ def sparse_attention(q, kv, sink, idxs, chunk=64):
     arithmetic is exactly what it was. Longer calls (prefill) process `chunk`
     tokens at a time with padded gathers instead of one Python iteration per
     token. Same equation, but batched matrix products may round differently in
-    the last bit. FRUSIUM_ATTENTION=loop forces the reference everywhere.
+    the last bit. FRUSTUM_ATTENTION=loop forces the reference everywhere.
     """
     bsz, seqlen, heads, dim = q.shape
-    if seqlen == 1 or idxs.shape[-1] == 0 or os.environ.get('FRUSIUM_ATTENTION') == 'loop':
+    if seqlen == 1 or idxs.shape[-1] == 0 or os.environ.get('FRUSTUM_ATTENTION') == 'loop':
         return sparse_attention_reference(q, kv, sink, idxs)
     out = torch.zeros_like(q)
     scale = dim ** -0.5
@@ -133,7 +133,7 @@ class DenseOps:
     """Quantized dense tensor reader shared by all four blocks and the Engram path."""
     def __init__(self, catalog, cache_mib):
         self.catalog, self.cfg = catalog, catalog.config['text_config']
-        self.loader = FrusiumLoader(catalog, 'cuda', cache_mib * MIB)
+        self.loader = FrustumLoader(catalog, 'cuda', cache_mib * MIB)
 
     def tensor(self, name):
         item = self.catalog.tensors[name]

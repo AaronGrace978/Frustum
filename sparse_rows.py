@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import numpy as np
 import torch
-from frusium_loader import Catalog, RangeReader
+from frustum_loader import Catalog, RangeReader
 
 class SparseRows:
     def __init__(self,catalog,device='cuda',budget_bytes=32*1024**2):

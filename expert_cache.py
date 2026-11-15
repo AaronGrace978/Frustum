@@ -25,7 +25,7 @@ from dataclasses import dataclass
 import time
 
 from cache_policy import Frequency, Tier
-from frusium_loader import RangeReader
+from frustum_loader import RangeReader
 
 
 @dataclass
@@ -53,7 +53,7 @@ class TieredExpertCache:
         self.cache = {}    # key -> Entry on the compute device
         self.ram = {}      # key -> list of CPU uint8 tensors
         self.pending = {}  # key -> Future[list[bytearray]]
-        self.pool = ThreadPoolExecutor(io_threads, thread_name_prefix='frusium-io') if io_threads else None
+        self.pool = ThreadPoolExecutor(io_threads, thread_name_prefix='frustum-io') if io_threads else None
         self.cap, self.headroom = cap_bytes, headroom_bytes
         self.requests = self.hits = self.host_hits = self.disk_reads = self.evictions = 0
         self.upload_seconds = self.wait_seconds = 0.0

@@ -22,7 +22,7 @@ import torch.nn.functional as F
 from tokenizers import Tokenizer
 
 from block_primitives import hc_pre
-from frusium_loader import Catalog, RangeReader, default_model_root
+from frustum_loader import Catalog, RangeReader, default_model_root
 from generation import chat_prompt, drive, reusable_prefix  # chat_prompt re-exported for callers
 from layers0_3_block import GIB, SequentialBlocks
 import placement
@@ -252,7 +252,7 @@ def main():
     if not torch.cuda.is_available():
         raise SystemExit('CUDA required')
     if args.legacy:
-        os.environ['FRUSIUM_READER'] = 'mmap'
+        os.environ['FRUSTUM_READER'] = 'mmap'
     free, total = torch.cuda.mem_get_info()
     catalog = Catalog(args.model)
     plan = build_plan(catalog, args, total, free)

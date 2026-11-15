@@ -37,14 +37,14 @@ def current_pages(root):
     split_reads = first_runs['split']['warm']['file_bytes'] / 1e9
     return [
         {
-            'title': 'Frusium_loader',
+            'title': 'Frustum_loader',
             'subtitle': 'Local model inference on a 16 GB GPU',
             'body': [
                 ('p', 'Consolidated engineering whitepaper | Version 0.4.0 | November 14, 2026'),
                 ('p', 'Project concept and direction: Aaron Grace. Implementation and analysis assisted by ChatGPT. Experimental engineering report.'),
                 ('contributor', 'Contributor: Dino Buddy. The project also received assistance from DinoClaw, Aaron Grace’s original agent runtime.'),
                 ('h', 'What the prototype demonstrates'),
-                ('p', f'Frusium_loader ran three distinct checkpoints on one RTX 5060 Ti. In GLM-4.7-Flash, reusing {cached} cached prompt tokens brought a warm follow-up to its first token in {span("followup_reuse")}. Rebuilding the same conversation took {span("followup_rebuild")}. Both paths produced the same follow-up token IDs.'),
+                ('p', f'Frustum_loader ran three distinct checkpoints on one RTX 5060 Ti. In GLM-4.7-Flash, reusing {cached} cached prompt tokens brought a warm follow-up to its first token in {span("followup_reuse")}. Rebuilding the same conversation took {span("followup_rebuild")}. Both paths produced the same follow-up token IDs.'),
                 ('table', [
                     ['Checkpoint', 'Recorded result on the same GPU'],
                     ['DeepSeek V4.1 Flash', f'All 40 layers ran from a roughly 510 GB checkpoint. First smoke test generated {len(deep["token_ids"])} tokens in {deep["seconds"]:.0f} s.'],
@@ -83,7 +83,7 @@ def current_pages(root):
                 ('p', 'GLM follow-up parity was checked against a full rebuild on the tested conversation. Cold first-token timings varied widely with run order and cache state. Full-model numerical parity, other GPUs, and broader multi-turn workloads remain unverified.'),
                 ('h', 'Reproduce the GLM comparison'),
                 ('code', '.\\run_glm_placement_test.ps1 --evidence placement-a.json\n.\\run_glm_placement_test.ps1 --order "split,baseline" --evidence placement-b.json'),
-                ('p', 'The launcher accepts FRUSIUM_PYTHON to select an existing CUDA Python environment. Use the same GLM GGUF checkpoint and tokenizer for both orders.'),
+                ('p', 'The launcher accepts FRUSTUM_PYTHON to select an existing CUDA Python environment. Use the same GLM GGUF checkpoint and tokenizer for both orders.'),
                 ('h', 'Embedded evidence'),
                 ('table', [
                     ['Records', 'What they contain'],
