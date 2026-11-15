@@ -3,7 +3,7 @@
 $candidates = @(
     $env:FRUSTUM_PYTHON,
     (Join-Path $PSScriptRoot '.venv\Scripts\python.exe'),
-    'C:\Users\AGrac\Documents\Codex\2026-11-13\new-chat-3\Frustum_loader\.venv-cuda\Scripts\python.exe'
+    'C:\Users\AGrac\Documents\Codex\2026-11-13\new-chat-3\Frusium_loader\.venv-cuda\Scripts\python.exe'
 )
 $cudaPython = $null
 foreach ($candidate in $candidates) {
