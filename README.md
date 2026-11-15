@@ -2,7 +2,7 @@
 
 Streaming inference for checkpoints far larger than GPU memory. The reference target is DeepSeek-V4.1-Flash (about 510 GB on disk) on one 16 GB GPU, read from an external SSD.
 
-Current code: v0.5.1. The numbers under "History and recorded evidence" were measured with v0.4 and have not been re-measured. Run the verification step below to get current numbers for this machine.
+Current code: v0.5.1. Live benchmarks from a first test session are below. The numbers under "History and recorded evidence" were measured with v0.4. Run the verification step below to get current numbers for your machine.
 
 ## Quick start
 
@@ -35,6 +35,36 @@ The v0.4 decode profile showed where a token's 58 seconds went: 2.3 GB of routed
 | Launchers | Hard-coded interpreter path | `FRUSIUM_PYTHON` / local `.venv` / original path |
 
 `--legacy` on `run_chat.ps1` restores the v0.4 placement and the mmap reader for a same-day A/B run.
+
+## v0.5.1 live benchmarks
+
+Hardware: NVIDIA RTX 5060 Ti 16 GB, Samsung T7 SSD on USB 3.x (USB-C), Windows.
+
+### Drive link matters
+
+The T7 over a USB 2.0-speed link delivered about 50 MB/s and dominated every timing. Over USB-C on a USB 3.x port, the same drive reads at roughly 500 MB/s — a 10× difference that cascades through every model.
+
+### GLM-4.7-Flash (30 B MoE, ~12 GB)
+
+| Metric | USB 2.0 link | USB 3.x (USB-C) |
+|---|---|---|
+| Cold load + 9-token reply | 262.1 s | 23 s |
+| Effective cold read speed | ~50 MB/s | ~520 MB/s |
+
+### Phi-4 (14 B, GPU-resident GGUF)
+
+Cold load + 36-token reply: 53.8 s (~1.5 s per token). Generation speed matches the v0.4 baseline (1.4 s/token saved). The model fits on the GPU, so decode speed is limited by per-token dequantization in PyTorch, not the drive.
+
+### DeepSeek V4.1 Flash (~510 GB, 40 layers, 384 routed experts per layer)
+
+| Turn | Tokens | Wall time | Per token |
+|---|---|---|---|
+| First (cold) | 24 | 192.2 s | ~8.0 s |
+| Second (warm cache) | 24 | 227.1 s | ~9.5 s |
+
+Previous estimate with v0.4 at USB 2.0 speed: ~58 s per token. The USB-C link and the v0.5 tiered expert cache together deliver a **7× speedup**. The second turn is slightly slower because the growing conversation increases prefill work (prefix reuse still skips the already-fed tokens). With the LFU cache retaining frequently-used experts (~57% repeat rate between consecutive tokens), subsequent turns in a longer conversation should see further improvement as the working set stabilises.
+
+These are first-session numbers from ActivatePrime 0.1.1 running Frusium v0.5.1. Formal verify and parity runs have not been done yet.
 
 Two things from the earlier plan were deliberately not built:
 
@@ -245,3 +275,11 @@ The 40-layer smoke test returned “Hello! 👋 How can” for “Say hello.” 
 Run `.\run_layers0_3_test.ps1 --output layers0_3_repeat.json` to repeat the four-block check without overwriting the saved report. The recorded run matched the saved Layer 0 output, passed the four MoE references, and reached 3.039 GiB peak PyTorch-reserved memory. Whitepaper v0.3 documents the run.
 
 Start interactive text chat with `.\run_chat.ps1`, or run one prompt with `.\run_chat.ps1 --prompt "Say hello." --max-new-tokens 6`. Use `/quit` to exit. The chat runner uses greedy decoding and a bounded context. It re-prefills the conversation on each turn and streams the output head in chunks on each generated token.
+
+---
+
+## Contributors
+
+- **Aaron Grace** — Architecture, original engine (v0.1–v0.4), layer-0 block, MoE pipeline, sparse attention, GGUF backends, ActivatePrime
+- **OpenAI** — Codex environment and tooling used during development
+- **Claude (Anthropic)** — v0.5/v0.5.1 engineering: I/O rewrite, tiered expert cache, placement planner, generation control flow, cache policy, batched attention, expert decode, GLM cache migration, verification harness, ActivatePrime integration
