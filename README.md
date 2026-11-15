@@ -30,9 +30,9 @@ v0.5 moved the bottleneck. With the drive on a USB 3.x link, a large share of ea
 - `FRUSTUM_FUSED=0` or `frustum_chat.py --no-fused` turns it off.
 - Checked without a GPU by `tools/fused_host_check.py`, which compiles the same CUDA source with g++ (32 threads per warp so the warp shuffles behave as on hardware). Every column of every format is bit-exact against NumPy ports of the reference decoders, and those ports match the official `gguf` dequantizer bit for bit.
 
-**Next-layer expert prediction** (DeepSeek, `streamed_moe.py`). During a decode step, layer N's MoE input is also run through layer N+1's router, and reads for its top experts start in the background straight away, behind layer N's own reads. When layer N+1 routes for real, reads that were guessed right are already done or under way; wrong guesses are cancelled if they have not started. The real router still decides which experts run, so a wrong guess costs drive time, never accuracy. Recall (the share of routed experts that were guessed) is reported in `--evidence` and `/stats`. `FRUSTUM_PREDICT_NEXT=N` or `--predict-next N` sets how many experts to guess per layer (default 6; 0 disables).
+**Next-layer expert prediction** (DeepSeek, `streamed_moe.py`). During a decode step, layer N's MoE input is also run through layer N+1's router, and reads for its top experts start in the background straight away, behind layer N's own reads. When layer N+1 routes for real, reads that were guessed right are already done or under way; wrong guesses are cancelled if they have not started. The real router still decides which experts run, so a wrong guess costs drive time, never accuracy. Recall (the share of routed experts that were guessed) is reported in `--evidence` and `/stats`. `FRUSTUM_PREDICT_NEXT=N` or `--predict-next N` turns it on with N guesses per layer (6 matches the router).
 
-Both are on by default, including in ActivatePrime. `--legacy` turns both off.
+**Prediction is off by default.** The first live DeepSeek turn with it on took about 7 minutes against about 3 minutes on v0.5.1. DeepSeek is drive-bound, and wrong guesses start reading at once, so they hold up the real reads. It stays off until `run_speed_check.ps1 --deepseek` shows its recall and its effect. Fused kernels are on by default, including in ActivatePrime; `--legacy` turns them off.
 
 ### Measure it
 

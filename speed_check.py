@@ -6,7 +6,7 @@
 
 Each model runs twice in fresh processes with the same prompt and greedy decoding:
   before  FRUSTUM_FUSED=0 (and, for DeepSeek, --predict-next 0)
-  after   defaults: fused decode kernels on, next-layer prediction on
+  after   defaults: fused decode kernels on (DeepSeek also runs a third time with --predict-next 6)
 Reports mean seconds per decode token, the speed-up, whether the generated token ids
 match, and DeepSeek's prediction recall. Writes speed_check_results.json.
 Token ids can legitimately differ after many tokens: the fused kernels sum in a different
@@ -86,6 +86,9 @@ def main():
                 before = deepseek_numbers(run('frustum_chat.py', common + ['--no-fused', '--predict-next', '0'],
                                               {}, tmp / 'd0.json'))
                 after = deepseek_numbers(run('frustum_chat.py', common, {}, tmp / 'd1.json'))
+                results.append(compare('deepseek (fused only)', before, after))
+                after = deepseek_numbers(run('frustum_chat.py', common + ['--predict-next', '6'], {}, tmp / 'd2.json'))
+                name = 'deepseek (fused + prediction)'
             results.append(compare(name, before, after))
     args.output.write_text(json.dumps(results, indent=2), encoding='utf-8')
     print(f'\nWrote {args.output.name}')

@@ -72,7 +72,7 @@ class StreamedMoE:
         predict_next: during a decode step, run the next layer's router on this layer's input and
         start reading that many of its likely experts early (v0.6). The real routing still decides
         which experts run, so a wrong guess costs drive time, never accuracy. 0 disables.
-        Default: FRUSTUM_PREDICT_NEXT, else the model's experts per token.
+        Default: FRUSTUM_PREDICT_NEXT, else 0 (off until measured: wrong guesses compete with real reads).
         """
         self.catalog=catalog
         self.cfg=catalog.config['text_config']
@@ -87,7 +87,7 @@ class StreamedMoE:
         self.lookahead=max(1,2*io_threads) if lookahead is None else lookahead
         self._last_layer=None
         if predict_next is None:
-            predict_next=int(os.environ.get('FRUSTUM_PREDICT_NEXT',self.cfg['num_experts_per_tok']))
+            predict_next=int(os.environ.get('FRUSTUM_PREDICT_NEXT','0'))
         self.predict_next=0 if io_threads==0 else max(0,predict_next)
         self._predicted=None  # (layer, set of expert ids) guessed during the previous layer
         self.prediction=dict(guessed=0,routed=0,routed_and_guessed=0)

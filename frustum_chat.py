@@ -237,7 +237,7 @@ def main():
                         help='Decode steps use the reference decode-then-multiply path instead of fused kernels')
     parser.add_argument('--predict-next', type=int,
                         help='Experts of the next layer to start reading early during decode (0 disables). '
-                             'Default: FRUSTUM_PREDICT_NEXT, else experts per token')
+                             'Default: FRUSTUM_PREDICT_NEXT, else 0 (off)')
     parser.add_argument('--legacy', action='store_true',
                         help='v0.4 behaviour for A/B runs: mmap reader, 256 MiB caches, streamed head, no reuse')
     args = parser.parse_args()
