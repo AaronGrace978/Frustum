@@ -22,11 +22,17 @@ compared across configurations: the patch changes no arithmetic, so they must be
 
 Configurations
   baseline  current code with v0.7 behaviour switched off (FRUSTUM_COALESCE=0,
-            FRUSTUM_PROTECT_LAYER=0, no prediction). Same instrumentation, old I/O behaviour.
+            FRUSTUM_PROTECT_LAYER=0, no prediction, buffered --reader direct). Same
+            instrumentation, old I/O behaviour.
   patch     current defaults.
   shadow    patch + --predict-next 6 --predict-mode shadow: measures guess precision, reads nothing.
   gated     patch + --predict-next 6 (reads guesses only while measurably right).
   spill     patch + --spill-dir (needs --spill-dir; its first cold run fills the tier).
+  unbuffered patch + --reader unbuffered (v0.8, Windows): reads bypass the OS file cache and the
+            auto host tier grows. Its "warm" runs stay cold by design: nothing is left in the
+            OS cache between processes. Default for frustum_chat.py on Windows since v0.8, so
+            patch and unbuffered are the same there.
+  direct    patch + --reader direct: the v0.7 buffered reader, for A/B runs against v0.8.
   v06       frustum_chat.py from --baseline-dir. It has no I/O ledger, so only timings,
             token ids and physical device bytes are available for it.
 
@@ -46,11 +52,13 @@ import os_cache
 
 HERE = Path(__file__).resolve().parent
 CONFIGS = {
-    'baseline': (['--predict-next', '0'], {'FRUSTUM_COALESCE': '0', 'FRUSTUM_PROTECT_LAYER': '0'}),
+    'baseline': (['--predict-next', '0', '--reader', 'direct'], {'FRUSTUM_COALESCE': '0', 'FRUSTUM_PROTECT_LAYER': '0'}),
     'patch': (['--predict-next', '0'], {}),
     'shadow': (['--predict-next', '6', '--predict-mode', 'shadow'], {}),
     'gated': (['--predict-next', '6', '--predict-mode', 'gated'], {}),
     'spill': (['--predict-next', '0'], {}),
+    'unbuffered': (['--predict-next', '0', '--reader', 'unbuffered'], {}),
+    'direct': (['--predict-next', '0', '--reader', 'direct'], {}),
     'v06': (['--predict-next', '0'], {}),
 }
 

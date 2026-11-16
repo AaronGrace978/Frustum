@@ -194,7 +194,7 @@ def build_plan(catalog, args, total, free):
         try:
             p = placement.plan(catalog, cap, reserve_bytes=int(args.reserve_gib * GIB), dense=args.dense,
                                head=args.output_head, expert_cache_mib=args.expert_cache_mib,
-                               host_cache_gib=args.host_cache_gib)
+                               host_cache_gib=args.host_cache_gib, unbuffered=args.reader == 'unbuffered')
         except ValueError as error:
             raise SystemExit(str(error))
         if args.cache_policy != 'auto':
@@ -257,6 +257,11 @@ def main():
     parser.add_argument('--spill-gib', type=float, default=64.0, help='Byte budget for --spill-dir')
     parser.add_argument('--ram-floor-gib', type=float, default=3.0,
                         help='Shrink the host RAM tier when free system RAM falls below this; 0 disables')
+    parser.add_argument('--reader', choices=('direct', 'unbuffered'),
+                        help='How checkpoint bytes are read. direct goes through the OS file cache; unbuffered '
+                             '(Windows) bypasses it, so the host RAM tier can take most of the spare RAM. '
+                             'Default: FRUSTUM_READER, else unbuffered on Windows (v0.8: 29%% faster decode in '
+                             'bench_runs/v08_patch_vs_unbuffered_2), direct elsewhere')
     parser.add_argument('--legacy', action='store_true',
                         help='v0.4 behaviour for A/B runs: mmap reader, 256 MiB caches, streamed head, no reuse')
     args = parser.parse_args()
@@ -285,7 +290,18 @@ def main():
     if args.predict_next is not None and args.predict_next < 0:
         parser.error('--predict-next takes 0 or more')
     if args.legacy:
+        if args.reader:
+            parser.error('--reader cannot be combined with --legacy (which uses the mmap reader)')
         os.environ['FRUSTUM_READER'] = 'mmap'
+    else:
+        args.reader = (args.reader or os.environ.get('FRUSTUM_READER')
+                       or ('unbuffered' if os.name == 'nt' else 'direct'))
+        if args.reader not in ('direct', 'unbuffered'):
+            parser.error('FRUSTUM_READER must be direct or unbuffered (or use --legacy for mmap)')
+        if args.reader == 'unbuffered' and os.name != 'nt':
+            print('Note: unbuffered reads are Windows-only; using direct reads.', flush=True)
+            args.reader = 'direct'
+        os.environ['FRUSTUM_READER'] = args.reader
     if args.legacy or args.no_fused:
         os.environ['FRUSTUM_FUSED'] = '0'
     free, total = torch.cuda.mem_get_info()
@@ -446,6 +462,7 @@ def main():
                                    sampling=dict(temperature=args.temperature, top_k=args.top_k,
                                                  top_p=args.top_p, seed=args.seed),
                                    legacy=args.legacy, io_threads=moe_options['io_threads'],
+                                   reader=os.environ.get('FRUSTUM_READER', 'direct'),
                                    expert_cache=cache.stats(), dense_cache=engine.ops.loader.stats(),
                                    prediction=engine.moe.prediction_stats(), fused=fused_report(),
                                    top_logprobs=distributions,

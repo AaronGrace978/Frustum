@@ -85,6 +85,63 @@ class Catalog:
                     stored_dtypes=dict(Counter(t.dtype for t in self.tensors.values())),
                     header_bytes_read=self.header_bytes, weight_payload_bytes_read=0)
 
+UNBUFFERED_ALIGN = 4096  # a multiple of every common sector size (512, 4096)
+
+
+class _UnbufferedFile:
+    """One Windows handle opened with FILE_FLAG_NO_BUFFERING (v0.8).
+
+    The OS file cache never sees these reads, so expert bytes are not held twice in RAM
+    (once by Windows, once by the host tier). Offsets, lengths and the buffer address must
+    be sector-aligned, so each read goes through an aligned bounce buffer owned by the
+    calling thread and the wanted slice is copied out. Positioned reads use an OVERLAPPED
+    offset on a synchronous handle: no shared file pointer.
+    """
+
+    def __init__(self, path):
+        import ctypes
+        from ctypes import wintypes
+        self._ctypes, self._wintypes = ctypes, wintypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        kernel.ReadFile.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD,
+                                    ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        self._kernel = kernel
+        # GENERIC_READ, share read/write/delete, OPEN_EXISTING,
+        # FILE_FLAG_NO_BUFFERING | FILE_FLAG_SEQUENTIAL_SCAN
+        handle = kernel.CreateFileW(str(path), 0x80000000, 0x7, None, 3, 0x20000000 | 0x08000000, None)
+        if handle is None or handle == wintypes.HANDLE(-1).value:
+            raise OSError(ctypes.get_last_error(), 'Unbuffered open failed', str(path))
+        self._handle = handle
+
+        class Overlapped(ctypes.Structure):
+            _fields_ = [('internal', ctypes.c_size_t), ('internal_high', ctypes.c_size_t),
+                        ('offset', wintypes.DWORD), ('offset_high', wintypes.DWORD),
+                        ('event', wintypes.HANDLE)]
+        self._overlapped = Overlapped
+
+    def read_aligned(self, offset, address, length):
+        """One ReadFile of `length` bytes at `offset` into `address` (all aligned). Returns bytes read."""
+        ctypes = self._ctypes
+        overlapped = self._overlapped(0, 0, offset & 0xFFFFFFFF, offset >> 32, None)
+        got = self._wintypes.DWORD(0)
+        if not self._kernel.ReadFile(self._handle, ctypes.c_void_p(address), length, ctypes.byref(got),
+                                     ctypes.byref(overlapped)):
+            error = ctypes.get_last_error()
+            if error == 38:  # ERROR_HANDLE_EOF
+                return 0
+            raise OSError(error, 'Unbuffered read failed')
+        return got.value
+
+    def close(self):
+        if self._handle is not None:
+            self._kernel.CloseHandle(self._handle)
+            self._handle = None
+
+
 class RangeReader:
     """Positioned reads from persistent file handles; no whole-shard copy.
 
@@ -93,7 +150,9 @@ class RangeReader:
     per request, which is slow on USB storage. This version keeps one handle
     per (thread, shard) and issues large sequential read calls straight into
     the destination buffer. mode='mmap' (or FRUSTUM_READER=mmap in the
-    environment) selects the old path for A/B runs.
+    environment) selects the old path for A/B runs. mode='unbuffered' (v0.8,
+    Windows only) bypasses the OS file cache; elsewhere it falls back to direct
+    and sets `fallback_reason`.
 
     Thread-safe: every thread owns its handles. bytes_read counts logical
     payload bytes; the OS cache may serve them without touching the drive.
@@ -105,8 +164,11 @@ class RangeReader:
         mode = mode or os.environ.get('FRUSTUM_READER', 'direct')
         if chunk_bytes <= 0:
             raise ValueError('chunk_bytes must be positive')
-        if mode not in ('direct', 'mmap') or access not in ('sequential', 'random'):
-            raise ValueError('mode is direct|mmap and access is sequential|random')
+        if mode not in ('direct', 'mmap', 'unbuffered') or access not in ('sequential', 'random'):
+            raise ValueError('mode is direct|mmap|unbuffered and access is sequential|random')
+        self.fallback_reason = None
+        if mode == 'unbuffered' and os.name != 'nt':
+            mode, self.fallback_reason = 'direct', 'unbuffered reads are implemented for Windows only'
         self.chunk_bytes = chunk_bytes
         self.mode = mode
         self.bytes_read = 0
@@ -128,7 +190,10 @@ class RangeReader:
             while len(handles) >= self.MAX_HANDLES:
                 _, old = handles.popitem(last=False)
                 old.close()
-            handle = handles[path] = io.FileIO(os.open(path, self._flags), 'rb', closefd=True)
+            if self.mode == 'unbuffered':
+                handle = handles[path] = _UnbufferedFile(path)
+            else:
+                handle = handles[path] = io.FileIO(os.open(path, self._flags), 'rb', closefd=True)
         else:
             handles.move_to_end(path)
         return handle
@@ -147,6 +212,8 @@ class RangeReader:
         began = time.perf_counter()
         if self.mode == 'mmap':
             self._mmap_into(item, view, start)
+        elif self.mode == 'unbuffered':
+            self._unbuffered_into(item, view, start)
         else:
             handle = self._handle(item.path)
             handle.seek(item.offset + start)
@@ -158,6 +225,38 @@ class RangeReader:
                 done += got
         view.release()
         self._account(size, time.perf_counter() - began)
+
+    def _bounce(self):
+        """This thread's aligned bounce buffer: (memoryview of chunk_bytes, its address)."""
+        cached = getattr(self._local, 'bounce', None)
+        if cached is None:
+            import ctypes
+            align = UNBUFFERED_ALIGN
+            length = -(-self.chunk_bytes // align) * align
+            raw = bytearray(length + align)  # never resized, so its address stays fixed
+            base = ctypes.addressof(ctypes.c_char.from_buffer(raw))
+            pad = (-base) % align
+            cached = self._local.bounce = (raw, memoryview(raw)[pad:pad + length], base + pad)
+        return cached[1], cached[2]
+
+    def _unbuffered_into(self, item, view, start):
+        handle = self._handle(item.path)
+        bounce, address = self._bounce()
+        align = UNBUFFERED_ALIGN
+        position = item.offset + start
+        end = position + len(view)
+        done = 0
+        while position < end:
+            aligned = position - position % align
+            length = min(len(bounce), -(-(end - aligned) // align) * align)
+            got = handle.read_aligned(aligned, address, length)
+            skip = position - aligned
+            usable = min(got - skip, end - position)
+            if usable <= 0:
+                raise ValueError('Truncated tensor payload: ' + item.name)
+            view[done:done + usable] = bounce[skip:skip + usable]
+            done += usable
+            position += usable
 
     def _mmap_into(self, item, view, start):
         with open(item.path, 'rb') as f:
@@ -396,6 +495,48 @@ class PrototypeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             reader.read(item)
         reader.close()
+    @unittest.skipUnless(os.name == 'nt', 'unbuffered reads are Windows-only')
+    def test_unbuffered_matches_direct(self):
+        """v0.8: same bytes as direct reads at unaligned offsets, across bounce-buffer chunks and threads."""
+        from concurrent.futures import ThreadPoolExecutor
+        import random
+        data = random.Random(7).randbytes(3 * UNBUFFERED_ALIGN * 5 + 1234)  # not a multiple of the sector
+        path = self.root / 'big.bin'
+        path.write_bytes(data)
+        rng = random.Random(11)
+        items = []
+        for i in range(60):
+            offset = rng.randrange(len(data) - 1)
+            items.append(TensorRange(f't{i}', path, offset, rng.randrange(1, len(data) - offset + 1), 'U8', ()))
+        items.append(TensorRange('tail', path, len(data) - 5, 5, 'U8', ()))
+        for chunk in (3, UNBUFFERED_ALIGN, 2 * UNBUFFERED_ALIGN + 1):
+            reader = RangeReader(chunk, mode='unbuffered')
+            with ThreadPoolExecutor(4) as pool:
+                got = list(pool.map(lambda item: bytes(reader.read(item)), items))
+            self.assertEqual(got, [data[t.offset:t.offset + t.size] for t in items])
+            grouped = reader.read_group(items[:3])
+            self.assertEqual([bytes(g) for g in grouped], [data[t.offset:t.offset + t.size] for t in items[:3]])
+            whole = TensorRange('whole', path, 0, len(data), 'U8', ())
+            part = bytearray(4099)
+            reader.readinto(whole, part, 4093)  # starts 3 bytes before a sector boundary
+            self.assertEqual(bytes(part), data[4093:4093 + 4099])
+            reader.close()
+        short = TensorRange('past_end', path, len(data) - 3, 10, 'U8', ())
+        reader = RangeReader(mode='unbuffered')
+        with self.assertRaises(ValueError):
+            reader.read(short)
+        reader.close()
+
+    def test_unbuffered_falls_back_off_windows(self):
+        reader = RangeReader(mode='unbuffered')
+        if os.name == 'nt':
+            self.assertEqual((reader.mode, reader.fallback_reason), ('unbuffered', None))
+        else:
+            self.assertEqual(reader.mode, 'direct')
+            self.assertTrue(reader.fallback_reason)
+        self.assertEqual(reader.read(self.catalog.tensors['b']), bytes(range(16, 32)))
+        reader.close()
+
     def test_cache_and_leases(self):
         loader = FrustumLoader(self.catalog,budget_bytes=32,chunk_bytes=3)
         with loader.acquire('a') as a:

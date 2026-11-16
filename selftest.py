@@ -361,6 +361,19 @@ class PlacementTests(unittest.TestCase):
         self.assertEqual(p['host_cache_mib'], 13 * 1024)
         self.assertIn('resident', placement.describe(p))
 
+    def test_unbuffered_host_share(self):
+        """v0.8: without the OS-cache duplicate the auto host tier takes 85% of RAM above 6 GiB."""
+        ram = 20 * placement.GIB
+        buffered = placement.plan(self.catalog(), 12 * placement.GIB, ram_available=ram)
+        unbuffered = placement.plan(self.catalog(), 12 * placement.GIB, ram_available=ram, unbuffered=True)
+        self.assertEqual(buffered['host_cache_mib'], 7 * 1024)
+        self.assertEqual(unbuffered['host_cache_mib'], int(14 * placement.GIB * 0.85) // placement.MIB)
+        capped = placement.plan(self.catalog(), 12 * placement.GIB, ram_available=64 * placement.GIB, unbuffered=True)
+        self.assertEqual(capped['host_cache_mib'], 16 * 1024)
+        explicit = placement.plan(self.catalog(), 12 * placement.GIB, ram_available=ram, unbuffered=True,
+                                  host_cache_gib=2)
+        self.assertEqual(explicit['host_cache_mib'], 2048)
+
     def test_small_card_falls_back(self):
         p = placement.plan(self.catalog(), 8 * placement.GIB, ram_available=10 * placement.GIB)
         self.assertEqual((p['dense'], p['head']), ('streamed', 'resident'))

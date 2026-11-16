@@ -14,6 +14,8 @@ import re
 GIB = 1024 ** 3
 MIB = 1024 ** 2
 LAYER = re.compile(r'^layers\.(\d+)\.(.+)$')
+HOST_SHARE_BUFFERED = 0.5     # of RAM above 6 GiB, when the OS file cache also holds expert bytes
+HOST_SHARE_UNBUFFERED = 0.85  # v0.8: no duplicate in the OS file cache
 
 
 def available_ram():
@@ -72,8 +74,14 @@ def measure(catalog):
 
 
 def plan(catalog, gpu_cap_bytes, *, reserve_bytes=2 * GIB, dense='auto', head='auto',
-         expert_cache_mib=None, host_cache_gib='auto', ram_available=None):
-    """Return a placement dict. Raises ValueError when an explicit request cannot fit."""
+         expert_cache_mib=None, host_cache_gib='auto', ram_available=None, unbuffered=False):
+    """Return a placement dict. Raises ValueError when an explicit request cannot fit.
+
+    unbuffered=True means expert reads bypass the OS file cache (FRUSTUM_READER=unbuffered).
+    The automatic host tier then takes 85% of the spare RAM instead of 50%: with buffered
+    reads Windows keeps its own copy of every expert read, so half the spare RAM was left
+    for that duplicate.
+    """
     if dense not in ('auto', 'resident', 'streamed') or head not in ('auto', 'resident', 'streamed'):
         raise ValueError('dense and head accept auto, resident or streamed')
     sizes = measure(catalog)
@@ -116,7 +124,8 @@ def plan(catalog, gpu_cap_bytes, *, reserve_bytes=2 * GIB, dense='auto', head='a
     if ram_available is None:
         ram_available = available_ram()
     if host_cache_gib == 'auto':
-        host_bytes = 0 if ram_available is None else int(min(16 * GIB, max(0, ram_available - 6 * GIB) * 0.5))
+        share = HOST_SHARE_UNBUFFERED if unbuffered else HOST_SHARE_BUFFERED
+        host_bytes = 0 if ram_available is None else int(min(16 * GIB, max(0, ram_available - 6 * GIB) * share))
         if ram_available is None:
             notes.append('Could not read available RAM; host tier off. Set --host-cache-gib to enable it.')
     else:
