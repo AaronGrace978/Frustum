@@ -1,4 +1,4 @@
-"""Build Frustum_loader_Whitepaper_v0.9.0.pdf from this script and whitepaper/assets.
+"""Build Frustum_loader_Whitepaper_v0.10.0.pdf from this script and whitepaper/assets.
 
 Run from the repo root:  python whitepaper/build_whitepaper.py
 Needs reportlab and pypdf. Evidence JSONs in the repo root are embedded as attachments.
@@ -18,8 +18,8 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph, Prefo
 ROOT = Path(__file__).resolve().parent.parent
 WP = ROOT / 'whitepaper'
 A = WP / 'assets'
-OUT = WP / 'Frustum_loader_Whitepaper_v0.9.0.pdf'
-VERSION = 'Version 0.9.0 | November 16, 2026'
+OUT = WP / 'Frustum_loader_Whitepaper_v0.10.0.pdf'
+VERSION = 'Version 0.10.0 | November 16, 2026'
 
 FONT_DIRS = [Path('/usr/share/fonts/truetype/dejavu'), Path('C:/Windows/Fonts')]
 
@@ -113,7 +113,7 @@ def on_page(canvas, doc):
     canvas.setStrokeColor(TEAL)
     canvas.setLineWidth(1.6)
     canvas.line(0.75 * inch, h - 0.66 * inch, w - 0.75 * inch, h - 0.66 * inch)
-    canvas.drawString(0.75 * inch, 0.5 * inch, f'{VERSION} | Measured v0.8-v0.9 benchmarks; live v0.5.1 runs')
+    canvas.drawString(0.75 * inch, 0.5 * inch, f'{VERSION} | Measured v0.8-v0.10 benchmarks; live runs')
     canvas.drawRightString(w - 0.75 * inch, 0.5 * inch, str(doc.page))
     canvas.restoreState()
 
@@ -126,7 +126,7 @@ def story():
           P(f'Technical whitepaper | {VERSION}'),
           P('Project concept, architecture and direction: <b>Aaron Grace</b>. '
             'Engineering contributors: <b>OpenAI</b> (ChatGPT and Codex, v0.1 to v0.4 implementation and analysis) and '
-            '<b>Claude / Anthropic</b> (v0.5-v0.9 I/O, placement, cache, attention and measurement engineering). '
+            '<b>Claude / Anthropic</b> (v0.5-v0.10 I/O, placement, cache, attention, kernel and measurement engineering). '
             f'Contributor: Dino Buddy {DINO}. The project also received assistance from DinoClaw, '
             'Aaron Grace\u2019s original agent runtime.'),
           P('The project was previously published as <i>Frusium_loader</i>. The name is now Frustum_loader: '
@@ -145,7 +145,8 @@ def story():
             '4.06 s/token, with identical token ids (Section 17). Two further ideas, asynchronous uploads and gated '
             'next-layer prefetch, measured slower and stay off by default. Version 0.9 lets attention extend the '
             'conversation state by many tokens in one pass, so follow-up turns start replying 38% to 51% sooner, with '
-            'the same reply tokens (Section 18).'),
+            'the same reply tokens (Section 18). Version 0.10 trims GPU and Python overhead with bit-identical '
+            'results and records research notes and a roadmap (Sections 19 and 20).'),
           table([
               ['DeepSeek V4.1 Flash, measured', 'RTX 5060 Ti 16 GB, checkpoint on a T7 at a 10 Gbps USB port'],
               ['v0.7 defaults (buffered reads)', '5.69 s/token decode, 63.0 s to first token (bench_e2e.py median)'],
@@ -183,9 +184,11 @@ def story():
               ['16', 'v0.7: I/O measurement, roofline and guarded data movement'],
               ['17', 'v0.8: measured baseline, unbuffered reads and the per-layer stall'],
               ['18', 'v0.9: batched follow-up prompts'],
-              ['19', 'Interpretation and limitations'],
-              ['20', 'Reproduction and integration'],
-              ['21', 'Contributors and references'],
+              ['19', 'v0.10: less GPU and Python overhead per token'],
+              ['20', 'Research notes and future directions'],
+              ['21', 'Interpretation and limitations'],
+              ['22', 'Reproduction and integration'],
+              ['23', 'Contributors and references'],
               ['A', 'Run evidence (embedded attachments)'],
           ], widths=(0.8 * inch, 5.9 * inch)),
           picture(A / 'deepseek_progress.png', 5.0 * inch,
@@ -722,7 +725,129 @@ def story():
           P('The same check found an existing issue: at four layers its own tolerance fails on unchanged v0.8 code, '
             'because prefill and one-at-a-time decode already differ by about 4.6% there. Batched append is no '
             'further from decode than prefill is. The cause of the drift was not investigated in this release.'),
-          H1('19. Interpretation and limitations'),
+          PageBreak()]
+
+    # ---------------------------------------------------------------- 19 (v0.10)
+    s += [H1('19. v0.10: less GPU and Python overhead per token'),
+          P('Section 17 showed that about 2 s of each decode token was GPU work and Python overhead rather than '
+            'drive reads. Version 0.10 removes redundant work in that part without changing any arithmetic: every '
+            'change below produces bit-identical numbers, and the reply token ids are unchanged.'),
+          H2('Where the per-token overhead was'),
+          P('A PyTorch profile of one decode step counted 9,629 copy operations (783 ms), 5,778 small divisions and '
+            '761 forced GPU-to-CPU synchronisations. Timing one routed expert in isolation: 1.25 ms per expert call, '
+            'of which the fused FP4 matrix kernel is 0.11 ms. The activation quantizer (expert_correctness.activation, '
+            'about thirteen small kernels) took 0.27 ms per call and ran three times per expert, twice on the same '
+            'input. Each new expert also forced three synchronisations for its NaN-scale check (0.1 ms each).'),
+          table([
+              ['Change', 'Exactness', 'Effect'],
+              ['Fused activation kernel (fused_kernels act_quant)', 'Self-test on edge cases plus the first 64 real calls '
+               'compared bit for bit; switches only itself off on any difference; 0 mismatches in 400 random stress tensors',
+               '0.274 to 0.036 ms per call (7.6x)'],
+              ['w1 and w3 share one quantized input', 'Same values reused', 'One quantization per expert saved'],
+              ['NaN-scale check on the CPU bytes before upload, memoised per expert', 'Same test, same error',
+               'No GPU synchronisation for a newly uploaded expert'],
+          ], widths=(2.2 * inch, 2.75 * inch, 1.75 * inch)),
+          H2('Result'),
+          P('Same prompt as Section 17, fresh processes, same session. A clean v0.9 checkout decoded at 4.1 s/token; '
+            'v0.10 decoded at 4.02 and 3.92 s/token in two runs, with token ids identical to v0.8 and v0.9. That is about '
+            '2-4% faster: real but small, because most expert work was already hidden behind drive reads. A planned '
+            'three-run A/B stopped after one run per side because of a path bug in bench_e2e.py’s --baseline-dir '
+            'mode (fixed), so these are single-run numbers.'),
+          H2('What remains between layers'),
+          P('A second profile timed the work done while the drive is idle between layers, per decode token: attention '
+            '0.42 s (10.6 ms per layer), hyper-connection mixes 0.27 s (3.4 ms per call, 80 calls, mostly the '
+            '20-iteration Sinkhorn normalisation as about 85 tiny kernels), rotary embeddings 0.10 s, re-decoding the '
+            'FP8 wo_a matrix to FP32 every token 0.10 s, dense projections 0.07 s and norms 0.04 s. Capturing the '
+            'mixes as CUDA graphs (same kernels replayed, so the same bits) and decoding wo_a straight to BF16 (exact, '
+            'because every E4M3 value times a power of two fits in BF16) are the next exact steps.'),
+          PageBreak()]
+
+    # ---------------------------------------------------------------- 20 (research and directions)
+    s += [H1('20. Research notes and future directions'),
+          P('This section records the measurements, analyses and ideas from the v0.8 to v0.10 work that did not '
+            'become features, so that later work can start from them.'),
+          H2('Live app results on the same day (ActivatePrime, v0.7 code, T7 on a 10 Gbps port)'),
+          table([
+              ['Turn', 'Result'],
+              ['DeepSeek V4.1 Flash, first turn', '24 tokens in 158.4 s, about 5 s between tokens (was 192.2 s in v0.5.1)'],
+              ['DeepSeek, follow-up “Say one word.”', '1 token in 55.2 s, almost all of it feeding 8 prompt tokens one '
+               'at a time; v0.9 removes most of this (Section 18)'],
+              ['GLM-4.7-Flash, first turn', '9 tokens in 19.7 s'],
+              ['GLM-4.7-Flash, follow-up', '26 tokens in 12.1 s (about 0.47 s/token)'],
+          ], widths=(2.2 * inch, 4.5 * inch)),
+          P('GLM-4.7-Flash fits on the GPU and runs about ten times faster per token than DeepSeek here. A harness '
+            'that routes quick turns and tool calls to GLM or Phi-4 and escalates hard reasoning to DeepSeek would make '
+            'the system feel fast while keeping DeepSeek for the turns that need it. Starting with explicit rules and '
+            'a user override is safer than an automatic complexity classifier; switching models mid-conversation '
+            'costs a full prefill on DeepSeek because the models share no attention state.'),
+          H2('The drive link'),
+          P('The same T7 measured about 42 MB/s on one port and cable and 909 MB/s on a 10 Gbps port: a 22-fold '
+            'difference that dominates every other optimisation. A benchmark at 42 MB/s would have measured the cable, '
+            'not the engine. The checkpoint stays on the T7 by choice; the opt-in spill tier, which copies experts to '
+            'an internal drive, is therefore not used on this machine.'),
+          H2('DSpark speculative decoding: analysed, paused'),
+          P('The checkpoint ships DSpark: three draft layers (mtp.0-2, 128 experts each with 3 active, about 7.2 GB '
+            'of experts), a Markov head and a confidence head. The drafter proposes 5 tokens, read from the inputs of '
+            'layers 37-39, and the full model verifies them in one pass. On a GPU-resident model that pass costs about '
+            'the same as one token. Here it does not, because the verifying pass needs the union of every verified '
+            'token’s experts. Measured on recorded decode routing:'),
+          table([
+              ['Consecutive tokens in one pass', 'Distinct experts per layer', 'vs one token'],
+              ['1', '6.0', '1.00x'], ['2', '9.9', '1.64x'], ['3', '12.9', '2.15x'],
+              ['4', '15.6', '2.60x'], ['6 (one token plus five drafts)', '20.3', '3.38x'],
+          ], widths=(2.5 * inch, 2.1 * inch, 2.1 * inch)),
+          P('About 2.8 s of a 4.1 s token is expert reading, so verifying five drafts costs about 11-12 s per pass and '
+            'needs about three accepted tokens per pass to break even. With acceptance similar to published '
+            'multi-token prediction results and two or three drafts verified per pass, the estimate is 12-22% faster '
+            'decode; with lower acceptance, no gain. Building it needs the three draft layers, the two heads and a '
+            'rollback of attention state (window ring, compressor tails, compressed caches, Engram history) for '
+            'rejected drafts. It was paused in favour of exact GPU work. A safe first step, if resumed: implement '
+            'only the drafter in shadow mode and measure acceptance; continue only if first-draft acceptance is '
+            'above about 60%. The multi-token pass it needs already exists (Section 18).'),
+          H2('Game-engine streaming ideas mapped to this engine'),
+          table([
+              ['Game technique', 'Frustum equivalent', 'Status'],
+              ['Streaming the level ahead of the player', 'Read layer N+1’s experts during layer N, gated by '
+               'router confidence [W4] [W6] [W7]', 'Measured: 72% right, but wrong guesses cost more than the overlap saved here'],
+              ['Job chains and double-buffered DMA [W9]', 'Overlap read, upload and compute with pinned memory and '
+               'side streams', 'Measured slower in v0.8; uploads were already hidden behind reads'],
+              ['Level of detail', 'Low-precision copies of low-weight experts on a cache miss [W5] [W8]',
+               'Not built: changes output; would need an opt-in fast mode and quality checks'],
+              ['Disc layout in load order', 'Co-locate experts used together [W3]', 'Mostly present: one contiguous '
+               'read per expert'],
+              ['Command buffers', 'CUDA graphs for fixed per-layer kernel sequences', 'Next exact step (Section 19)'],
+          ], widths=(1.75 * inch, 2.55 * inch, 2.4 * inch)),
+          H2('Native FP4 on the RTX 5060 Ti'),
+          P('torch.nn.functional.scaled_mm in PyTorch 2.11 runs NVFP4 (E2M1 values, one E4M3 scale per 16) on this '
+            'GPU: about 326 TFLOPS for 1,024 rows against 21 TFLOPS for BF16, but about 73 µs per call for 1 to '
+            '8 rows, so it does not help single-token decode. The checkpoint’s MXFP4 layout (one E8M0 scale per '
+            '32) is refused by the standard wheel. The checkpoint’s power-of-two scales may convert exactly to '
+            'NVFP4, and public reports describe wrong FP4 results on some RTX 50-series setups, so this was probed '
+            'only for speed. It is most useful for prefill and draft verification.'),
+          H2('Hardware outlook (arithmetic, not measured)'),
+          table([
+              ['Machine', 'What changes', 'Estimated decode'],
+              ['This PC after planned exact work', 'Fewer stalls and less overhead per layer', 'about 2.5-3.5 s/token'],
+              ['+ 128 GB RAM', 'A large hot set of experts stays in RAM', 'about 0.7-1 s/token'],
+              ['A100 80 GB with the model still on the T7', 'About 24% of routed experts fit in VRAM; misses still '
+               'cross USB', 'about 0.7-1.2 s/token'],
+              ['A100 80 GB + 384 GB RAM', 'All 289 GB of routed experts in RAM; misses cost about 50 ms over PCIe',
+               'about 0.1-0.2 s/token, limited by engine overhead'],
+          ], widths=(2.1 * inch, 2.9 * inch, 1.7 * inch)),
+          P('The A100 lacks FP4 and FP8 tensor cores, so prefill would rely on software decoding. On any machine '
+            'where storage stops being the limit, the per-token GPU and Python overhead (Section 19) becomes the limit, '
+            'which is why that work carries forward.'),
+          H2('Roadmap'),
+          table([
+              ['Priority', 'Item', 'Exact?'],
+              ['1', 'CUDA graphs for hyper-connection mixes; direct FP8-to-BF16 wo_a decode; cached small weights', 'Yes'],
+              ['2', 'Investigate the few-percent prefill/decode drift at 160 tokens (Section 18)', 'Diagnostic'],
+              ['3', 'Model router in the harness: GLM or Phi-4 by default, DeepSeek on request', 'Yes (per model)'],
+              ['4', 'Persist expert-use history and pre-warm the RAM tier from the T7 at start-up', 'Yes'],
+              ['5', 'DSpark drafter in shadow mode to measure acceptance, then decide', 'Yes if verified'],
+              ['6', 'Opt-in fast mode: cache-aware routing and fewer experts per token', 'No; quality must be measured'],
+          ], widths=(0.8 * inch, 4.6 * inch, 1.3 * inch)),
+          H1('21. Interpretation and limitations'),
           H2('Bandwidth first'),
           P('An all-miss pass through six routed FP4 experts in each of 40 layers requests about 4.5 GB. At 50 MB/s '
             'that is roughly 90 s of transfer; at 500 MB/s it is roughly 9 s. Expert reuse, the GPU and host tiers, '
@@ -750,7 +875,7 @@ def story():
           PageBreak()]
 
     # ---------------------------------------------------------------- 19
-    s += [H1('20. Reproduction and integration'),
+    s += [H1('22. Reproduction and integration'),
           H2('Environment'),
           P('Launchers look for Python in this order: FRUSTUM_PYTHON, .venv\\Scripts\\python.exe in the project folder, '
             'then the original Codex environment. A fresh machine:'),
@@ -804,6 +929,7 @@ def story():
               ['FRUSTUM_DEEPSEEK_HOST_GIB', 'Host-RAM expert tier size'],
               ['FRUSTUM_GLM_PLACEMENT', 'baseline, split (default) or tiered'],
               ['FRUSTUM_FUSED', '0 turns off the v0.6 fused decode kernels'],
+              ['FRUSTUM_FUSED_ACT', '0 turns off the v0.10 fused activation kernel (it also turns itself off on any mismatch)'],
               ['FRUSTUM_PREDICT_NEXT', 'Next-layer experts to read early per decode layer (default 0, off)'],
               ['FRUSTUM_PREDICT_MODE', 'shadow, gated (default when enabled), or always'],
               ['FRUSTUM_COALESCE / FRUSTUM_PROTECT_LAYER', '0 restores the v0.6 read or layer-protection behaviour for A/B runs'],
@@ -815,12 +941,12 @@ def story():
           PageBreak()]
 
     # ---------------------------------------------------------------- 19
-    s += [H1('21. Contributors and references'),
+    s += [H1('23. Contributors and references'),
           table([
               ['Contributor', 'Role'],
               ['Aaron Grace', 'Project concept, architecture, original engine, hardware testing and direction'],
               ['OpenAI (ChatGPT, Codex)', 'Implementation and analysis for v0.1 to v0.4; earlier whitepaper editions'],
-              ['Claude (Anthropic)', 'v0.5-v0.9 engineering: batched follow-up prompts, RangeReader and unbuffered reads, tiered expert cache, eviction policy, placement, prefix reuse, streaming, fused decode kernels, next-layer prediction, I/O ledger, roofline, spill tier and the v0.8 measurements'],
+              ['Claude (Anthropic)', 'v0.5-v0.10 engineering: fused activation kernel, batched follow-up prompts, RangeReader and unbuffered reads, tiered expert cache, eviction policy, placement, prefix reuse, streaming, fused decode kernels, next-layer prediction, I/O ledger, roofline, spill tier and the v0.8 measurements'],
               [f'Dino Buddy {DINO}', 'Contributor and test prompt'],
               ['DinoClaw', 'Aaron Grace\u2019s original agent runtime; assistance'],
           ], widths=(1.9 * inch, 4.8 * inch)),
@@ -839,6 +965,11 @@ def story():
             'Inference, ISCA 2024.'),
           P('[W5] Tang et al., HOBBIT: A Mixed Precision Expert Offloading System for Fast MoE Inference, '
             'arXiv:2411.01433.'),
+          P('[W6] ProMoE: Fast MoE-based LLM Serving using Proactive Caching, arXiv:2410.22134.'),
+          P('[W7] CommitMoE (AAAI-26): fallback-free expert offloading; router certainty predicts prefetch accuracy.'),
+          P('[W8] MoBiLE: Efficient Mixture-of-Experts Inference on Consumer GPU with Mixture of Big Little Experts, '
+            'arXiv:2510.12357.'),
+          P('[W9] Gyrling, Parallelizing the Naughty Dog Engine Using Fibers, GDC 2015.'),
           H2('Version history'),
           P('0.1 four MoE sublayers. 0.2 Layer 0 block. 0.3 repeatability audit and Layers 0\u20133. 0.3.8 first '
             '40-layer reply, resident head, expert cache benchmark, Phi-4 and GLM backends. 0.4.0 GLM placement and '
@@ -850,7 +981,10 @@ def story():
             'unbuffered Windows reads and a larger host RAM tier (5.69 to 4.06 s/token), a per-section decode profiler, '
             'and opt-in asynchronous uploads and gated prefetch, both measured slower and left off. 0.9.0 attention '
             'extends existing state by many tokens per pass, so follow-up prompts are processed in one pass '
-            '(follow-up time to first token 38% to 51% lower, same reply tokens), and scripted multi-turn runs.'),
+            '(follow-up time to first token 38% to 51% lower, same reply tokens), and scripted multi-turn runs. '
+            '0.10.0 a bit-identical fused activation kernel with a self-checking fallback, one quantization shared by '
+            'w1 and w3, and CPU-side scale checks that remove per-expert GPU synchronisations; research notes, the '
+            'DSpark analysis and a roadmap (Section 20).'),
           PageBreak()]
 
     # ---------------------------------------------------------------- appendix
@@ -902,6 +1036,10 @@ EVIDENCE = [
     ('v09_logs/long_context_3layers_v09.json', 'Batched append vs decode, layers 0-2'),
     ('v09_logs/long_context_4layers_v09.json', 'Batched append vs decode, layers 0-3'),
     ('v09_logs/long_context_4layers_v08code.json', 'Prefill vs decode on unchanged v0.8 code, layers 0-3'),
+    ('CHANGES_v0.10.md', 'v0.10 GPU-overhead work, research notes and roadmap'),
+    ('v10_logs/v010_vs_v09_bench.log', 'v0.10 vs a clean v0.9 checkout, same session (one run each)'),
+    ('v10_logs/between_layer_profile.txt', 'Per-section time while the drive is idle between layers'),
+    ('v10_logs/expert_union.txt', 'Distinct experts per layer for consecutive decode tokens (DSpark analysis)'),
 ]
 
 

@@ -211,7 +211,7 @@ def main():
         parser.error('v06 needs --baseline-dir')
     if 'spill' in args.configs and not args.spill_dir:
         parser.error('spill needs --spill-dir')
-    out = args.output or HERE / 'bench_runs' / time.strftime('%Y%m%d_%H%M%S')
+    out = (args.output or HERE / 'bench_runs' / time.strftime('%Y%m%d_%H%M%S')).resolve()  # absolute: v06 runs elsewhere
     out.mkdir(parents=True, exist_ok=False)
     shards = sorted(args.model.glob('*.safetensors'))
     counters = os_cache.DeviceCounters(args.model)

@@ -248,15 +248,16 @@ class AsyncUploadTests(ExpertCacheTests):
                     self.torch.cuda.synchronize()
                     self.assertEqual([bytes((d // 2).to(self.torch.uint8).cpu().numpy().tobytes()) for d in doubled],
                                      truth[key])
-                    if flag:
-                        self.assertEqual(entry.marker, key)
+                    self.assertEqual(entry.marker, key)  # both paths apply inspect's attributes
             if flag:
                 self.assertGreater(cache.host_hits, 0)
                 self.assertEqual(cache.staged_uploads, cache.disk_reads + cache.host_hits)
                 self.assertEqual(cache.blocking_stages, 0)  # every upload was staged off the main thread
                 self.assertFalse(cache.staged)
             else:
-                self.assertEqual((cache.staged_uploads, seen), (0, []))
+                # v0.10: the blocking path runs inspect once per key and reuses the result.
+                self.assertEqual(cache.staged_uploads, 0)
+                self.assertEqual(sorted(seen), sorted(keys))
 
     def test_env_switch(self):
         import os

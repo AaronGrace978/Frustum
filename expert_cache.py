@@ -127,6 +127,7 @@ class TieredExpertCache:
                            if self.async_upload and io_threads else None)
         self.staged = {}     # key -> Future[_Staged] for host-tier keys about to be uploaded
         self.inspect = None  # optional callable(key, cpu_tensors) -> dict of Entry attributes
+        self.inspected = {}  # key -> inspect() result, reused by the default (blocking) upload path
         self.staged_uploads = self.blocking_stages = 0
 
     # Attribute names kept from the v0 cache so existing reports keep working.
@@ -388,6 +389,14 @@ class TieredExpertCache:
             self.staged_uploads += 1
         else:
             entry = Entry([tensor.to(self.device) for tensor in tensors], size)
+            if self.inspect is not None:
+                # v0.10: the same CPU-side checks in the default path, memoised per key (the bytes of
+                # a key never change), so a newly uploaded expert needs no GPU synchronisation.
+                attrs = self.inspected.get(key)
+                if attrs is None:
+                    attrs = self.inspected[key] = self.inspect(key, tensors)
+                for name, value in attrs.items():
+                    setattr(entry, name, set(value) if isinstance(value, set) else value)
         # With async_upload this is the time to queue the copy, not the copy itself.
         self.upload_seconds += time.perf_counter() - began
         self.upload_bytes += size

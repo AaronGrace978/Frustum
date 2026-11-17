@@ -1,0 +1,14 @@
+Distinct routed experts per layer across consecutive decode tokens (DSpark verification cost analysis)
+Source: --trace-routing in bench_runs/v08_pipeline_and_gated/patch_warm_0.json and
+bench_runs/v08_patch_vs_unbuffered_2/unbuffered_cold_0.json (15 decode steps each, identical results),
+DeepSeek V4.1 Flash, 40 layers, 6 routed experts per token. Measured 2026-11-16.
+
+  1 consecutive tokens:  6.00 distinct experts per layer  (1.00x one token)
+  2 consecutive tokens:  9.87 distinct experts per layer  (1.64x one token)
+  3 consecutive tokens: 12.88 distinct experts per layer  (2.15x one token)
+  4 consecutive tokens: 15.63 distinct experts per layer  (2.60x one token)
+  6 consecutive tokens: 20.30 distinct experts per layer  (3.38x one token)
+
+Reading: a pass that verifies 1 token plus 5 DSpark drafts needs about 3.4 times the experts of
+one token. With about 2.8 s of a 4.1 s decode token spent reading experts, that pass costs about
+11-12 s, so it must accept about 3 tokens on average to break even.

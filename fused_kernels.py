@@ -209,6 +209,37 @@ extern "C" __global__ void block_matvec(const u8* __restrict__ W, const u8* __re
         }
     }
 }
+
+// v0.10: expert_correctness.activation in one launch instead of about thirteen. Same operations in
+// the same order: per 32-value group, scale = exp2(ceil(log2(max(amax|x|, 1e-4) / 448))), then
+// x / scale clamped to +-448, rounded to FP8 E4M3 (round to nearest even, E4M3 subnormals
+// included), times scale. amax propagates NaN like torch. Checked bit for bit against the
+// PyTorch version before use (Fused.activation).
+__device__ __forceinline__ float round_e4m3(float q) {
+    if (q != q) return q;
+    if (fabsf(q) < 0.015625f) return rintf(q * 512.0f) / 512.0f;   // below 2^-6: steps of 2^-9
+    u32 u = __float_as_uint(q);
+    u += 0x7ffffu + ((u >> 20) & 1u);                               // keep 3 mantissa bits, ties to even
+    return __uint_as_float(u & 0xfff00000u);
+}
+extern "C" __global__ void act_quant(const void* __restrict__ X, int bf16, long long n, float* __restrict__ Y) {
+    long long i = blockIdx.x * (long long)blockDim.x + threadIdx.x;
+    if (i >= n) return;                                             // n % 32 == 0: whole warps only
+    float v = bf16 ? __uint_as_float(((u32)((const u16*)X)[i]) << 16) : ((const float*)X)[i];
+    float m = fabsf(v);
+    int nan = v != v;
+    for (int o = 16; o > 0; o >>= 1) {
+        float other = __shfl_xor_sync(0xffffffffu, m, o);
+        m = other > m ? other : m;
+        nan |= __shfl_xor_sync(0xffffffffu, nan, o);
+    }
+    if (nan) m = __int_as_float(0x7fc00000);
+    float c = m < 1e-4f ? 1e-4f : m;
+    float s = exp2f(ceilf(log2f(c / 448.0f)));
+    float q = v / s;
+    q = q < -448.0f ? -448.0f : (q > 448.0f ? 448.0f : q);
+    Y[i] = round_e4m3(q) * s;
+}
 '''
 
 
@@ -315,7 +346,7 @@ class _Compiled:
                 module = ctypes.c_void_p()
                 self._check_cuda(self.cuda.cuModuleLoadData(ctypes.byref(module), self.ptx), 'cuModuleLoadData')
                 entry = {}
-                for name in ('gguf_matvec', 'block_matvec'):
+                for name in ('gguf_matvec', 'block_matvec', 'act_quant'):
                     function = ctypes.c_void_p()
                     self._check_cuda(self.cuda.cuModuleGetFunction(ctypes.byref(function), module, name.encode()),
                                      'cuModuleGetFunction')
@@ -342,6 +373,86 @@ class Fused:
         self.checked = set()
         self.calls = 0
         self.reason = None if self.enabled else 'FRUSTUM_FUSED=0'
+        # v0.10 fused activation quantizer: on unless FRUSTUM_FUSED_ACT=0; switches only itself off.
+        self.act_enabled = os.environ.get('FRUSTUM_FUSED_ACT', '1').strip().lower() not in ('0', 'false', 'off', 'no')
+        self.act_reason = None if self.act_enabled else 'FRUSTUM_FUSED_ACT=0'
+        self.act_tested = False
+        self.act_compared = 0
+        self.act_calls = 0
+
+    ACT_COMPARE_CALLS = 64  # real calls compared bit for bit with the reference before trusting the kernel
+
+    @staticmethod
+    def _same_bits(t, a, b):
+        """Bit-identical, except that any NaN equals any NaN (payloads are not significant)."""
+        if a.shape != b.shape or a.dtype != b.dtype:
+            return False
+        nan_a, nan_b = t.isnan(a), t.isnan(b)
+        return bool(t.equal(nan_a, nan_b)) and bool(t.equal(a.masked_fill(nan_a, 0).view(t.int32),
+                                                            b.masked_fill(nan_b, 0).view(t.int32)))
+
+    def _act_off(self, reason):
+        if self.act_enabled:
+            _note(f'fused activation off: {reason}. Using the reference path.')
+        self.act_enabled = False
+        self.act_reason = reason
+
+    def _act_launch(self, x):
+        t = self.t
+        xs = x.contiguous()
+        out = t.empty(xs.shape, device=xs.device, dtype=t.float32)
+        n = xs.numel()
+        self.compiled.launch('act_quant', n // 32, [
+            ctypes.c_void_p(xs.data_ptr()), int(xs.dtype == t.bfloat16), ctypes.c_longlong(n),
+            ctypes.c_void_p(out.data_ptr())])
+        return out
+
+    def _act_selftest(self, reference):
+        """Synthetic edge cases: every magnitude range, zero groups, FP8 ties and subnormals,
+        float32 subnormals, values that clamp at 448, NaN groups, both input dtypes."""
+        t = self.t
+        g = t.Generator(device='cpu').manual_seed(1234)
+        parts = [t.randn(64, 32, generator=g) * 10.0 ** e for e in range(-12, 7)]
+        parts.append(t.zeros(4, 32))
+        parts.append(t.full((2, 32), 1e-5))                       # all below the 1e-4 floor
+        parts.append(t.full((2, 32), 1.4e-45))                    # float32 subnormals
+        ties = t.arange(1, 449, dtype=t.float32)[:448] / 4        # many exact FP8 ties after scaling
+        parts.append(t.cat((ties, -ties)).reshape(-1, 32))
+        spread = t.randn(32, 32, generator=g)
+        spread[:, 0] = 1e4                                        # one large value: the rest go subnormal
+        parts.append(spread)
+        nan_group = t.randn(2, 32, generator=g)
+        nan_group[0, 5] = float('nan')
+        parts.append(nan_group)
+        x = t.cat(parts).reshape(-1, 32).cuda()                  # one 32-value group per row
+        wide = x[:x.shape[0] - x.shape[0] % 8].reshape(-1, 256)   # several groups per row
+        for case in (x, x.to(t.bfloat16), wide, wide.to(t.bfloat16), wide[:3].contiguous()):
+            if not self._same_bits(t, self._act_launch(case), reference(case)):
+                raise RuntimeError(f'self-test mismatch ({case.dtype}, {tuple(case.shape)})')
+
+    def activation(self, x, reference):
+        """expert_correctness.activation(x) in one kernel launch, bit-identical. reference is that
+        function. Falls back to it for anything other than a 2-D CUDA float32/bfloat16 tensor whose
+        width is a multiple of 32, and switches itself off (only itself) on any mismatch."""
+        t = self.t
+        if (not self.act_enabled or not x.is_cuda or x.dim() != 2 or x.shape[1] % 32 or not x.numel()
+                or x.dtype not in (t.float32, t.bfloat16) or not self._ready()):
+            return reference(x)
+        try:
+            if not self.act_tested:
+                self._act_selftest(reference)
+                self.act_tested = True
+            out = self._act_launch(x)
+            if self.act_compared < self.ACT_COMPARE_CALLS:
+                expected = reference(x)
+                self.act_compared += 1
+                if not self._same_bits(t, out, expected):
+                    raise RuntimeError(f'mismatch on a real input {tuple(x.shape)} {x.dtype}')
+        except Exception as error:  # noqa: BLE001 - any failure means: use the reference path
+            self._act_off(str(error))
+            return reference(x)
+        self.act_calls += 1
+        return out
 
     def _ready(self):
         if not self.enabled:

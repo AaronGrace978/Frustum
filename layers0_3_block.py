@@ -23,7 +23,7 @@ import fused_kernels
 from layer0_block import RingKV
 from reproducibility import cache_sha256, tensor_sha256
 from sparse_rows import SparseRows
-from streamed_moe import StreamedMoE
+from streamed_moe import StreamedMoE, quantize  # quantize: v0.10 fused, bit-identical activation()
 
 GIB = 1024 ** 3
 MIB = 1024 ** 2
@@ -201,7 +201,7 @@ class DenseOps:
     def linear(self, x, name):
         if self.catalog.tensors[name + '.weight'].dtype != 'F8_E4M3':
             return F.linear(x.float(), self.matrix(name).float()).to(torch.bfloat16)
-        x = activation(x.reshape(-1, x.shape[-1])).reshape(x.shape)
+        x = quantize(x.reshape(-1, x.shape[-1])).reshape(x.shape)
         weight, scales = self._fp8_formats(name)
         with self.loader.acquire(name + '.weight') as raw, self.loader.acquire(name + '.scale') as scale_raw:
             def reference():
@@ -384,7 +384,7 @@ class Attention:
             1 if not self.ratio else self.cfg['rope_scaling']['factor'],
             self.cfg['rope_scaling']['beta_fast'], self.cfg['rope_scaling']['beta_slow'],
         )
-        kv = activation(kv.reshape(-1, kv.shape[-1])).reshape(kv.shape).to(torch.bfloat16)
+        kv = quantize(kv.reshape(-1, kv.shape[-1])).reshape(kv.shape).to(torch.bfloat16)
         window_size = self.cfg['sliding_window']
         if start and x.shape[1] > 1:
             # v0.9 batched append. The ring only holds `window` positions, so appending first would
@@ -441,7 +441,7 @@ class Attention:
         o = sparse_attention_reference(q, kv, sink, indexes) if start else sparse_attention(q, kv, sink, indexes)
         o[..., -rd:] = rope(o[..., -rd:], positions, self.cfg['rope_theta'] if not self.ratio else self.cfg['compress_rope_theta'], 0 if not self.ratio else self.cfg['rope_scaling']['original_max_position_embeddings'], 1 if not self.ratio else self.cfg['rope_scaling']['factor'], self.cfg['rope_scaling']['beta_fast'], self.cfg['rope_scaling']['beta_slow'], inverse=True)
         groups, rank = self.cfg['o_groups'], self.cfg['o_lora_rank']
-        o = activation(o.reshape(bsz, seqlen, groups, -1).reshape(-1, self.cfg['head_dim'] * self.cfg['num_attention_heads'] // groups)).reshape(bsz, seqlen, groups, -1).to(torch.bfloat16)
+        o = quantize(o.reshape(bsz, seqlen, groups, -1).reshape(-1, self.cfg['head_dim'] * self.cfg['num_attention_heads'] // groups)).reshape(bsz, seqlen, groups, -1).to(torch.bfloat16)
         wa = self.ops.matrix(p + 'wo_a').to(torch.bfloat16).reshape(groups, rank, -1)
         latent = torch.einsum('bsgd,grd->bsgr', o, wa)
         return self.ops.linear(latent.flatten(2), p + 'wo_b')

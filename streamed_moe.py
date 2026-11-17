@@ -20,6 +20,12 @@ MIB = 1024**2
 from expert_correctness import gpu_decode, cpu_decode, activation, decoder_test
 
 
+def quantize(x):
+    """activation(x) through the v0.10 fused kernel when it is available: bit-identical, one launch
+    instead of about thirteen. Falls back to activation itself (fused_kernels.Fused.activation)."""
+    return fused_kernels.get(torch).activation(x, activation)
+
+
 def fp8_decode_cpu(raw, scales):
     # Independent arithmetic E4M3FN decoder; 0x7f/0xff are NaN.
     bits=raw.astype(np.uint8)
@@ -197,7 +203,8 @@ class StreamedMoE:
         with self.router.acquire(name) as raw:
             return raw.view(dtype).reshape(item.shape).clone()
 
-    def _linear(self,entry,key,x,w,reference=False,decoded=False):
+    def _linear(self,entry,key,x,w,reference=False,decoded=False,quantized=None):
+        """quantized: activation(x) already computed by the caller (v0.10: w1 and w3 share one input)."""
         i=('w1','w2','w3').index(w)*2
         wi=self.catalog.tensors[self.cache.plan[key][i]]
         si=self.catalog.tensors[self.cache.plan[key][i+1]]
@@ -216,7 +223,7 @@ class StreamedMoE:
             if i not in checked:  # E8M0 255 is NaN; the reference rejects it on every call
                 if bool((scale==255).any()): raise ValueError('NaN scale')
                 checked.add(i)
-            xa=activation(x)
+            xa=quantize(x) if quantized is None else quantized
             return fused.block(xa,raw,scale,wi.dtype=='I8',
                                lambda:self._linear(entry,key,x,w,decoded=True),torch.bfloat16)
         if wi.dtype=='I8': matrix=gpu_decode(raw,scale)
@@ -230,7 +237,7 @@ class StreamedMoE:
             else:
                 matrix=matrix*factor.repeat_interleave(32,0).repeat_interleave(32,1)[:r,:c]
         else: raise ValueError('Unsupported matrix format')
-        return F.linear(activation(x),matrix).to(torch.bfloat16)
+        return F.linear(quantize(x),matrix).to(torch.bfloat16)
 
     @torch.inference_mode()
     def forward(self,x,layer,validate=True):
@@ -279,8 +286,11 @@ class StreamedMoE:
                 n=rows.numel()
                 rows_gpu=packed[start:start+n]
                 coeff=weights[rows_gpu,packed[start+n:start+2*n],None]
-            part=expert_forward(x[rows_gpu],coeff,
-                lambda z,w:self._linear(entry,key,z,w),cfg['swiglu_limit'])
+            xin=x[rows_gpu]
+            # v0.10: w1 and w3 read the same input; quantize it once (same values, half the work).
+            shared=quantize(xin) if fused_kernels.get(torch).enabled and xin.shape[0]<=fused_kernels.MAX_TOKENS else None
+            part=expert_forward(xin,coeff,
+                lambda z,w:self._linear(entry,key,z,w,quantized=shared if z is xin else None),cfg['swiglu_limit'])
             y.index_add_(0,rows_gpu,part.float())
             if validate:
                 cr=None if cols is None else wr[rows,cols,None]

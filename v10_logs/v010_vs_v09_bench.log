@@ -1,0 +1,48 @@
+model G:\Models\DeepSeek-V4.1-Flash (48 shards); device counters: ok
+[1/3] patch warm: G:\Models\DeepSeek-V4.1-Flash\Frustum_loader\frustum_chat.py --model G:\Models\DeepSeek-V4.1-Flash --prompt Do you like Dino Buddies? Reply in one short sentence. --max-new-tokens 24 --evidence bench_runs\v010_vs_v09\patch_warm_0.json --predict-next 0 --trace-routing 
+GPU cap 12.00 GiB, 2.00 GiB kept for working memory
+  dense weights   5.24 GiB  resident
+  output head     1.23 GiB  resident
+  routers         0.15 GiB  resident
+  shared experts  1.32 GiB  pinned
+  routed experts  1.99 GiB cache, about 113 experts, policy lfu (one token needs up to 4.20 GiB)
+Host RAM tier 15.6 GiB
+Generating with the local checkpoint...
+  prefill: layer 10/40
+  prefill: layer 20/40
+  prefill: layer 30/40
+  prefill: layer 40/40
+Assistant: I think Dino Buddies is a cute and fun series for kids.
+[15 tokens, first after 57.9s, then 4.0 s/token; 0/18 prompt tokens reused; disk 78.05 GB; experts 21% GPU, 20% RAM, 59% disk]
+[decode I/O per token: 2.02 GB experts (0.91 GB re-read), drive busy 59% of the time at 852 MB/s, queue 2.8, physical/logical 1.00]
+
+  first token 57.9s, 4.02 s/token, physical/logical 1.00 
+[1/3] v06 warm: C:\Users\AGrac\AppData\Local\Temp\claude\0af1732548d603fb\c3b650a7-1b39-47a5-a9c7-4350a5c44af6\scratchpad\v09_baseline\frustum_chat.py --model G:\Models\DeepSeek-V4.1-Flash --prompt Do you like Dino Buddies? Reply in one short sentence. --max-new-tokens 24 --evidence bench_runs\v010_vs_v09\v06_warm_0.json --predict-next 0 
+GPU cap 12.00 GiB, 2.00 GiB kept for working memory
+  dense weights   5.24 GiB  resident
+  output head     1.23 GiB  resident
+  routers         0.15 GiB  resident
+  shared experts  1.32 GiB  pinned
+  routed experts  1.99 GiB cache, about 113 experts, policy lfu (one token needs up to 4.20 GiB)
+Host RAM tier 15.5 GiB
+Generating with the local checkpoint...
+  prefill: layer 10/40
+  prefill: layer 20/40
+  prefill: layer 30/40
+  prefill: layer 40/40
+Assistant: I think Dino Buddies is a cute and fun series for kids.
+[15 tokens, first after 58.1s, then 4.1 s/token; 0/18 prompt tokens reused; disk 78.12 GB; experts 21% GPU, 20% RAM, 59% disk]
+[decode I/O per token: 2.03 GB experts (0.91 GB re-read), drive busy 59% of the time at 853 MB/s, queue 2.8, physical/logical 1.00]
+Traceback (most recent call last):
+  File "C:\Users\AGrac\AppData\Local\Temp\claude\0af1732548d603fb\c3b650a7-1b39-47a5-a9c7-4350a5c44af6\scratchpad\v09_baseline\frustum_chat.py", line 513, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\AGrac\AppData\Local\Temp\claude\0af1732548d603fb\c3b650a7-1b39-47a5-a9c7-4350a5c44af6\scratchpad\v09_baseline\frustum_chat.py", line 484, in main
+    with args.evidence.open('x', encoding='utf-8') as handle:
+         ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\AGrac\AppData\Roaming\uv\python\cpython-3.13.15-windows-x86_64-none\Lib\pathlib\_local.py", line 537, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'bench_runs\\v010_vs_v09\\v06_warm_0.json'
+
+  FAILED with exit code 1; see bench.log

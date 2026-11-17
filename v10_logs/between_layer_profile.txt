@@ -1,0 +1,15 @@
+=== seconds per decode token (9 steps; nested sections overlap) ===
+   0.424  attention TOTAL  (40/token, 10.60 ms each)
+   0.271  hc mixes  (80/token, 3.38 ms each)
+   0.104    rope (all callers)  (132/token, 0.79 ms each)
+   0.095  dense matrix decode (wo_a etc.)  (57/token, 1.67 ms each)
+   0.068  dense linear (all callers)  (181/token, 0.38 ms each)
+   0.065    attn._window  (40/token, 1.61 ms each)
+   0.044  dense norm  (165/token, 0.27 ms each)
+   0.037    attn sparse_attention_reference  (40/token, 0.91 ms each)
+   0.031    attn._compressed  (38/token, 0.81 ms each)
+   0.016  moe route  (40/token, 0.40 ms each)
+   0.015  hc_post  (80/token, 0.18 ms each)
+   0.011  hc_pre  (80/token, 0.13 ms each)
+   0.005  moe router weight fetch  (80/token, 0.07 ms each)
+

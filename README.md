@@ -2,9 +2,9 @@
 
 Streaming inference for checkpoints far larger than GPU memory. The reference target is DeepSeek-V4.1-Flash (about 510 GB on disk) on one 16 GB GPU, read from an external SSD.
 
-Current code: v0.9. Measured on an RTX 5060 Ti with the checkpoint on a USB SSD: DeepSeek decode **5.69 → 4.06 s/token** (v0.8, unbuffered reads), and follow-up turns start replying up to **51% sooner** (v0.9, batched follow-up prompts). See below. Live v0.5.1 benchmarks from a first test session are further down. The numbers under "History and recorded evidence" were measured with v0.4. Run the verification and benchmark steps below to get current numbers for your machine.
+Current code: v0.10 (bit-identical fused activation kernel and fewer GPU synchronisations: about 2-4% faster decode; research notes and roadmap in the whitepaper). Measured on an RTX 5060 Ti with the checkpoint on a USB SSD: DeepSeek decode **5.69 → 4.06 s/token** (v0.8, unbuffered reads), and follow-up turns start replying up to **51% sooner** (v0.9, batched follow-up prompts). See below. Live v0.5.1 benchmarks from a first test session are further down. The numbers under "History and recorded evidence" were measured with v0.4. Run the verification and benchmark steps below to get current numbers for your machine.
 
-**Whitepaper:** [`whitepaper/Frustum_loader_Whitepaper_v0.9.0.pdf`](whitepaper/Frustum_loader_Whitepaper_v0.9.0.pdf) documents the design, the v0.5.1 live benchmarks, v0.7's I/O/roofline tooling and the v0.8 and v0.9 measured results. Details and evidence: [`CHANGES_v0.9.md`](CHANGES_v0.9.md) and `v09_logs/`; [`CHANGES_v0.8.md`](CHANGES_v0.8.md) and `v08_logs/`; [`CHANGES_v0.7.md`](CHANGES_v0.7.md) and `v07_logs/`. Rebuild the current whitepaper with `python whitepaper/build_whitepaper.py`. Earlier editions are in `whitepaper/archive/`.
+**Whitepaper:** [`whitepaper/Frustum_loader_Whitepaper_v0.10.0.pdf`](whitepaper/Frustum_loader_Whitepaper_v0.10.0.pdf) documents the design, the v0.5.1 live benchmarks, v0.7's I/O/roofline tooling and the v0.8 and v0.9 measured results. Details and evidence: [`CHANGES_v0.10.md`](CHANGES_v0.10.md) and `v10_logs/`; [`CHANGES_v0.9.md`](CHANGES_v0.9.md) and `v09_logs/`; [`CHANGES_v0.8.md`](CHANGES_v0.8.md) and `v08_logs/`; [`CHANGES_v0.7.md`](CHANGES_v0.7.md) and `v07_logs/`. Rebuild the current whitepaper with `python whitepaper/build_whitepaper.py`. Earlier editions are in `whitepaper/archive/`.
 
 ## Quick start
 
@@ -20,6 +20,10 @@ The launchers look for Python in this order: `FRUSTUM_PYTHON`, `.venv\Scripts\py
     .venv\Scripts\pip install -r requirements.txt
 
 The model folder defaults to the parent of this folder. Set `FRUSTUM_MODEL` or pass `--model` to point elsewhere. Weights and the CUDA environment are not bundled.
+
+## What v0.10 changes
+
+Exact (bit-identical) cuts to per-token GPU and Python overhead: a fused activation kernel (0.274 to 0.036 ms per call, self-checked against PyTorch and self-disabling on any difference; `FRUSTUM_FUSED_ACT=0` turns it off), one shared quantization for w1 and w3, and CPU-side scale checks that remove 761 GPU synchronisations per token. Decode is about 2-4% faster with identical tokens: most of that work was already hidden behind drive reads. The whitepaper's new Section 20 records the research from this round: the DSpark analysis (paused: verifying drafts needs 3.4x the experts), game-engine streaming ideas, native FP4 on the 5060 Ti, hardware outlook and a roadmap. See [`CHANGES_v0.10.md`](CHANGES_v0.10.md).
 
 ## What v0.9 changes
 
@@ -358,4 +362,4 @@ Start interactive text chat with `.\run_chat.ps1`, or run one prompt with `.\run
 
 - **Aaron Grace** — Architecture, original engine (v0.1–v0.4), layer-0 block, MoE pipeline, sparse attention, GGUF backends, ActivatePrime
 - **OpenAI** — Codex environment and tooling used during development
-- **Claude (Anthropic)** — v0.5 to v0.9 engineering: batched follow-up prompts, unbuffered reader and v0.8 measurements, I/O ledger and roofline tooling, fused decode kernels, next-layer expert prediction, I/O rewrite, tiered expert cache, placement planner, generation control flow, cache policy, batched attention, expert decode, GLM cache migration, verification harness, ActivatePrime integration
+- **Claude (Anthropic)** — v0.5 to v0.10 engineering: fused activation kernel, batched follow-up prompts, unbuffered reader and v0.8 measurements, I/O ledger and roofline tooling, fused decode kernels, next-layer expert prediction, I/O rewrite, tiered expert cache, placement planner, generation control flow, cache policy, batched attention, expert decode, GLM cache migration, verification harness, ActivatePrime integration
