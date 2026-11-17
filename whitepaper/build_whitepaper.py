@@ -1,4 +1,4 @@
-"""Build Frustum_loader_Whitepaper_v0.10.0.pdf from this script and whitepaper/assets.
+"""Build Frustum_loader_Whitepaper_v0.11.0.pdf from this script and whitepaper/assets.
 
 Run from the repo root:  python whitepaper/build_whitepaper.py
 Needs reportlab and pypdf. Evidence JSONs in the repo root are embedded as attachments.
@@ -18,8 +18,8 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph, Prefo
 ROOT = Path(__file__).resolve().parent.parent
 WP = ROOT / 'whitepaper'
 A = WP / 'assets'
-OUT = WP / 'Frustum_loader_Whitepaper_v0.10.0.pdf'
-VERSION = 'Version 0.10.0 | November 16, 2026'
+OUT = WP / 'Frustum_loader_Whitepaper_v0.11.0.pdf'
+VERSION = 'Version 0.11.0 | November 17, 2026'
 
 FONT_DIRS = [Path('/usr/share/fonts/truetype/dejavu'), Path('C:/Windows/Fonts')]
 
@@ -113,7 +113,7 @@ def on_page(canvas, doc):
     canvas.setStrokeColor(TEAL)
     canvas.setLineWidth(1.6)
     canvas.line(0.75 * inch, h - 0.66 * inch, w - 0.75 * inch, h - 0.66 * inch)
-    canvas.drawString(0.75 * inch, 0.5 * inch, f'{VERSION} | Measured v0.8-v0.10 benchmarks; live runs')
+    canvas.drawString(0.75 * inch, 0.5 * inch, f'{VERSION} | Measured v0.8-v0.10 benchmarks; live DeepSeek and Qwen3-Next runs')
     canvas.drawRightString(w - 0.75 * inch, 0.5 * inch, str(doc.page))
     canvas.restoreState()
 
@@ -146,13 +146,15 @@ def story():
             'next-layer prefetch, measured slower and stay off by default. Version 0.9 lets attention extend the '
             'conversation state by many tokens in one pass, so follow-up turns start replying 38% to 51% sooner, with '
             'the same reply tokens (Section 18). Version 0.10 trims GPU and Python overhead with bit-identical '
-            'results and records research notes and a roadmap (Sections 19 and 20).'),
+            'results and records research notes and a roadmap (Sections 19 and 21). A second large model, Qwen3-Next 80B (163 GB), now runs on the same expert '
+            'cache at about 0.6-0.8 tokens per second (Section 20).'),
           table([
               ['DeepSeek V4.1 Flash, measured', 'RTX 5060 Ti 16 GB, checkpoint on a T7 at a 10 Gbps USB port'],
               ['v0.7 defaults (buffered reads)', '5.69 s/token decode, 63.0 s to first token (bench_e2e.py median)'],
               ['v0.8 defaults (unbuffered reads)', '4.06 s/token decode, 58.1 s to first token (29% faster decode)'],
               ['v0.9 follow-up turn, 8 new tokens', '22.1 s to first reply token, was 35.8 s'],
               ['v0.9 follow-up turn, 29 new tokens', '60.1 s to first reply token, was 123.7 s'],
+              ['Qwen3-Next 80B (163 GB BF16), first live run', '88 tokens in 132.3 s (0.79 tok/s); 96 tokens in 195.4 s (0.56 tok/s)'],
           ]),
           table([
               ['Checkpoint', 'Live result in ActivatePrime (v0.5.1, T7 on USB-C)'],
@@ -185,10 +187,11 @@ def story():
               ['17', 'v0.8: measured baseline, unbuffered reads and the per-layer stall'],
               ['18', 'v0.9: batched follow-up prompts'],
               ['19', 'v0.10: less GPU and Python overhead per token'],
-              ['20', 'Research notes and future directions'],
-              ['21', 'Interpretation and limitations'],
-              ['22', 'Reproduction and integration'],
-              ['23', 'Contributors and references'],
+              ['20', 'Qwen3-Next 80B: first live run'],
+              ['21', 'Research notes and future directions'],
+              ['22', 'Interpretation and limitations'],
+              ['23', 'Reproduction and integration'],
+              ['24', 'Contributors and references'],
               ['A', 'Run evidence (embedded attachments)'],
           ], widths=(0.8 * inch, 5.9 * inch)),
           picture(A / 'deepseek_progress.png', 5.0 * inch,
@@ -762,8 +765,43 @@ def story():
             'because every E4M3 value times a power of two fits in BF16) are the next exact steps.'),
           PageBreak()]
 
+    # ---------------------------------------------------------------- 20 (Qwen3-Next)
+    s += [H1('20. Qwen3-Next 80B: first live run'),
+          P('Qwen3-Next-80B-A3B-Instruct is an 80-billion-parameter mixture-of-experts model with about 3 billion '
+            'parameters active per token: 48 layers, 512 routed experts of 6 MiB each with 10 active per token, and '
+            'a hybrid attention stack in which every fourth layer is gated full attention and the other 36 are Gated '
+            'DeltaNet linear attention with a fixed-size recurrent state. The checkpoint is 163 GB in BF16. '
+            'qwen_next_chat.py implements both layer types in plain PyTorch on the same tiered expert cache as '
+            'DeepSeek: about 3.8 GiB of dense weights on the GPU, routed experts in a GPU tier, a host-RAM tier and '
+            'the drive, and follow-up turns that process only their new tokens. Before the live run it was checked '
+            'against the transformers 4.57 reference on a tiny random checkpoint: float32 logits agree to 5e-6 of '
+            'their scale with the same argmax at every position.'),
+          H2('First live run (ActivatePrime 0.1.5, checkpoint on the T7)'),
+          table([
+              ['Turn', 'Prompt processing', 'Reply'],
+              ['1: “Moment of truth!” (12 new tokens)', 'First token after 32 s, including loading',
+               '88 tokens in 132.3 s, 0.79 tokens/s'],
+              ['2: a question about running Qwen3-Next on commercial hardware (23 new tokens, 100 cached)',
+               'First token after 26 s', '96 tokens in 195.4 s, 0.56 tokens/s (hit the 96-token cap)'],
+          ], widths=(2.6 * inch, 1.9 * inch, 2.2 * inch)),
+          P('Placement chosen automatically: dense weights 3.8 GiB on the GPU, routed experts 6.9 GiB on the GPU plus '
+            '14.1 GiB of RAM, the remaining experts read from the T7. Both replies were coherent and on topic. The '
+            'second turn reused the 100 tokens of conversation state and processed only the 23 new ones. These are '
+            'single runs from the app, with the run inspector’s own timing, not bench_e2e.py medians.'),
+          H2('Why it is faster than DeepSeek here'),
+          P('A Qwen3-Next token touches 10 experts of 6 MiB in each of 48 layers, about 3 GB if nothing were cached, '
+            'against about 4.5 GB for DeepSeek. Its whole checkpoint (163 GB) is also a third of DeepSeek’s, so the '
+            '21 GiB of GPU and RAM expert tiers hold a much larger share of it and more reads are cache hits. The '
+            'result on the same machine and drive is roughly 1.3-1.8 s per token by the run inspector’s decode rate, against about 4 s for DeepSeek. The '
+            'v0.8-v0.10 work (unbuffered reads, the larger RAM tier, batched follow-ups, the fused activation kernel '
+            'where it applies) is shared engine code, so improvements to it carry over to both models.'),
+          picture(A / 'activateprime_qwen_next_live.png', 6.7 * inch,
+                  'Figure 2. ActivatePrime 0.1.5 running Qwen3-Next 80B from the T7: the conversation, the run '
+                  'inspector (load, prefill, decode, layer progress, rate) and the memory placement.'),
+          PageBreak()]
+
     # ---------------------------------------------------------------- 20 (research and directions)
-    s += [H1('20. Research notes and future directions'),
+    s += [H1('21. Research notes and future directions'),
           P('This section records the measurements, analyses and ideas from the v0.8 to v0.10 work that did not '
             'become features, so that later work can start from them.'),
           H2('Live app results on the same day (ActivatePrime, v0.7 code, T7 on a 10 Gbps port)'),
@@ -847,7 +885,7 @@ def story():
               ['5', 'DSpark drafter in shadow mode to measure acceptance, then decide', 'Yes if verified'],
               ['6', 'Opt-in fast mode: cache-aware routing and fewer experts per token', 'No; quality must be measured'],
           ], widths=(0.8 * inch, 4.6 * inch, 1.3 * inch)),
-          H1('21. Interpretation and limitations'),
+          H1('22. Interpretation and limitations'),
           H2('Bandwidth first'),
           P('An all-miss pass through six routed FP4 experts in each of 40 layers requests about 4.5 GB. At 50 MB/s '
             'that is roughly 90 s of transfer; at 500 MB/s it is roughly 9 s. Expert reuse, the GPU and host tiers, '
@@ -875,7 +913,7 @@ def story():
           PageBreak()]
 
     # ---------------------------------------------------------------- 19
-    s += [H1('22. Reproduction and integration'),
+    s += [H1('23. Reproduction and integration'),
           H2('Environment'),
           P('Launchers look for Python in this order: FRUSTUM_PYTHON, .venv\\Scripts\\python.exe in the project folder, '
             'then the original Codex environment. A fresh machine:'),
@@ -941,7 +979,7 @@ def story():
           PageBreak()]
 
     # ---------------------------------------------------------------- 19
-    s += [H1('23. Contributors and references'),
+    s += [H1('24. Contributors and references'),
           table([
               ['Contributor', 'Role'],
               ['Aaron Grace', 'Project concept, architecture, original engine, hardware testing and direction'],
@@ -984,7 +1022,8 @@ def story():
             '(follow-up time to first token 38% to 51% lower, same reply tokens), and scripted multi-turn runs. '
             '0.10.0 a bit-identical fused activation kernel with a self-checking fallback, one quantization shared by '
             'w1 and w3, and CPU-side scale checks that remove per-expert GPU synchronisations; research notes, the '
-            'DSpark analysis and a roadmap (Section 20).'),
+            'DSpark analysis and a roadmap (Section 21). 0.11.0 first live run of Qwen3-Next 80B (163 GB) on the same '
+            'expert cache: 0.56-0.79 tokens/s from the T7 in ActivatePrime 0.1.5 (Section 20).'),
           PageBreak()]
 
     # ---------------------------------------------------------------- appendix
@@ -1039,6 +1078,7 @@ EVIDENCE = [
     ('CHANGES_v0.10.md', 'v0.10 GPU-overhead work, research notes and roadmap'),
     ('v10_logs/v010_vs_v09_bench.log', 'v0.10 vs a clean v0.9 checkout, same session (one run each)'),
     ('v10_logs/between_layer_profile.txt', 'Per-section time while the drive is idle between layers'),
+    ('v11_logs/qwen_next_first_live_run.txt', 'Qwen3-Next 80B first live run: event log and run inspector numbers'),
     ('v10_logs/expert_union.txt', 'Distinct experts per layer for consecutive decode tokens (DSpark analysis)'),
 ]
 

@@ -4,7 +4,7 @@ Streaming inference for checkpoints far larger than GPU memory. The reference ta
 
 Current code: v0.10 (bit-identical fused activation kernel and fewer GPU synchronisations: about 2-4% faster decode; research notes and roadmap in the whitepaper). Measured on an RTX 5060 Ti with the checkpoint on a USB SSD: DeepSeek decode **5.69 → 4.06 s/token** (v0.8, unbuffered reads), and follow-up turns start replying up to **51% sooner** (v0.9, batched follow-up prompts). See below. Live v0.5.1 benchmarks from a first test session are further down. The numbers under "History and recorded evidence" were measured with v0.4. Run the verification and benchmark steps below to get current numbers for your machine.
 
-**Whitepaper:** [`whitepaper/Frustum_loader_Whitepaper_v0.10.0.pdf`](whitepaper/Frustum_loader_Whitepaper_v0.10.0.pdf) documents the design, the v0.5.1 live benchmarks, v0.7's I/O/roofline tooling and the v0.8 and v0.9 measured results. Details and evidence: [`CHANGES_v0.10.md`](CHANGES_v0.10.md) and `v10_logs/`; [`CHANGES_v0.9.md`](CHANGES_v0.9.md) and `v09_logs/`; [`CHANGES_v0.8.md`](CHANGES_v0.8.md) and `v08_logs/`; [`CHANGES_v0.7.md`](CHANGES_v0.7.md) and `v07_logs/`. Rebuild the current whitepaper with `python whitepaper/build_whitepaper.py`. Earlier editions are in `whitepaper/archive/`.
+**Whitepaper:** [`whitepaper/Frustum_loader_Whitepaper_v0.11.0.pdf`](whitepaper/Frustum_loader_Whitepaper_v0.11.0.pdf) documents the design, the v0.5.1 live benchmarks, v0.7's I/O/roofline tooling and the v0.8 and v0.9 measured results. Details and evidence: [`CHANGES_v0.10.md`](CHANGES_v0.10.md) and `v10_logs/`; [`CHANGES_v0.9.md`](CHANGES_v0.9.md) and `v09_logs/`; [`CHANGES_v0.8.md`](CHANGES_v0.8.md) and `v08_logs/`; [`CHANGES_v0.7.md`](CHANGES_v0.7.md) and `v07_logs/`. Rebuild the current whitepaper with `python whitepaper/build_whitepaper.py`. Earlier editions are in `whitepaper/archive/`.
 
 ## Quick start
 
@@ -21,7 +21,10 @@ The launchers look for Python in this order: `FRUSTUM_PYTHON`, `.venv\Scripts\py
 
 The model folder defaults to the parent of this folder. Set `FRUSTUM_MODEL` or pass `--model` to point elsewhere. Weights and the CUDA environment are not bundled.
 
-## Qwen3-Next-80B-A3B (new, not yet run on the real checkpoint)
+## Qwen3-Next-80B-A3B
+
+**First live run (ActivatePrime 0.1.5, 163 GB checkpoint on the T7, RTX 5060 Ti, 32 GB RAM):** 88 tokens in 132.3 s (0.79 tokens/s) on the first turn, first token after 32 s including loading; a 23-token follow-up reused 100 cached tokens, started replying after 26 s and produced 96 tokens in 195.4 s (0.56 tokens/s). Placement: dense 3.8 GiB on the GPU, experts 6.9 GiB GPU + 14.1 GiB RAM. Single app runs; event log in [`v11_logs/qwen_next_first_live_run.txt`](v11_logs/qwen_next_first_live_run.txt), whitepaper Section 20.
+
 
 [`qwen_next_chat.py`](qwen_next_chat.py) runs [Qwen/Qwen3-Next-80B-A3B-Instruct](https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct) (163 GB BF16, 48 layers, 512 experts with 10 active per token) on the same tiered expert cache as DeepSeek and GLM. About 3.7 GiB of dense weights stay on the GPU. The 6 MiB routed experts stream through the GPU tier, a host-RAM tier (`FRUSTUM_QWEN_HOST_GIB`, default 85% of free RAM above 6 GiB, up to 16 GiB) and the drive. The token embedding is read one row per token. It is a plain-PyTorch implementation of both layer types: gated full attention (every fourth layer) and Gated DeltaNet linear attention with a fixed-size recurrent state (the other 36). Follow-up turns that extend the previous token ids only process the new tokens. ActivatePrime 0.1.5 exposes it as "Qwen3-Next 80B".
 

@@ -1,0 +1,24 @@
+Qwen3-Next-80B-A3B-Instruct, first live run in ActivatePrime 0.1.5 (event log and run inspector, 2026-11-16)
+Machine: RTX 5060 Ti 16 GB, Ryzen 7 3700X, 32 GB RAM, checkpoint (163 GB BF16) on a Samsung T7 at 10 Gbps.
+Greedy decoding, replies capped at 96 tokens, 2,048-token context.
+
+18:03:02  Selected Qwen3-Next 80B
+18:03:18  Request · Qwen3-Next 80B · 1 message
+18:03:18  Loading Frustum backend…
+18:03:20  Loading Qwen3-Next dense weights…
+18:03:27  Qwen3-Next placement · dense 3.8 GiB · experts 6.9 GiB GPU + 14.1 GiB RAM
+18:03:27  Processing prompt…
+18:03:27  Processing prompt · 12 new tokens (0 cached)
+18:03:50  Prefill · layer 48/48
+18:03:50  First token after 32 s
+18:05:40  Done · 88 tokens in 132.3 s            (0.79 tok/s, run inspector)
+18:05:45  Request · Qwen3-Next 80B · 3 messages
+18:05:45  Processing prompt…
+18:05:45  Processing prompt · 23 new tokens (100 cached)
+18:06:11  Prefill · layer 48/48
+18:06:11  First token after 26 s
+18:09:00  Done · 96 tokens in 195.4 s            (0.56 tok/s, hit the 96-token reply cap)
+
+Turn 1 prompt: "Moment of truth!"  Turn 2 prompt: "A qwen3 next 80b running on commercial hardware"
+Both replies were coherent, on-topic English. The second follow-up reused 100 cached tokens and
+processed only the 23 new ones.
