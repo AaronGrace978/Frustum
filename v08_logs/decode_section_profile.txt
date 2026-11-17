@@ -1,0 +1,26 @@
+tools/profile_decode.py (scratch version of the same instrumentation), 2026-11-16
+RTX 5060 Ti 16 GB, Ryzen 7 3700X, 32 GB RAM, Samsung T7 on a 10 Gbps USB port.
+Build: v0.8 unbuffered reader with FRUSTUM_ASYNC_UPLOAD on (the first pipelined-upload build,
+staging in the reader threads). Prompt "Do you like Dino Buddies? Reply in one short sentence.",
+24 max new tokens, --predict-next 0. Each section is bracketed by torch.cuda.synchronize(),
+so the total is slower than an untimed run and the sections are upper bounds.
+
+Assistant: I think Dino Buddies is a cute and fun series for kids.
+[15 tokens, first after 59.0s, then 4.8 s/token; 0/18 prompt tokens reused; disk 79.01 GB; experts 21% GPU, 19% RAM, 60% disk]
+[decode I/O per token: 2.09 GB experts (0.97 GB re-read), drive busy 54% of the time at 798 MB/s, queue 2.8, physical/logical 1.00]
+
+=== per decode token (15 steps), seconds ===
+   4.815  TOTAL decode backbone  (1 calls/token)
+   3.771  moe forward (all)  (40 calls/token)
+   2.776    moe: cache.get (wait+upload)  (280 calls/token)
+   0.699    moe: expert compute  (280 calls/token)
+   0.537  attention  (40 calls/token)
+   0.365  hc mixes  (80 calls/token)
+   0.039  engram (incl. row reads)  (2 calls/token)
+   0.034    engram: row lookup  (2 calls/token)
+   0.026  tensor_sha256 traces  (200 calls/token)
+   0.020    moe: route  (40 calls/token)
+   0.003  engram hashes  (1 calls/token)
+
+Reading: per layer, about 65 ms of drive reads (GPU waiting) alternate with about 55 ms of
+GPU work (drive idle). Engram row reads and trace hashing are negligible.

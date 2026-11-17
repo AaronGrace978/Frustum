@@ -212,6 +212,65 @@ class ExpertCacheTests(unittest.TestCase):
         self.assertNotIn(keys[0], cache.pending)
 
 
+class AsyncUploadTests(ExpertCacheTests):
+    """v0.8 pinned staging + copy-stream uploads: same bytes as the blocking path."""
+
+    def setUp(self):
+        import torch
+        if not torch.cuda.is_available():
+            self.skipTest('needs CUDA')
+        super().setUp()
+
+    def make(self, gpu_keys, host_keys=0, **options):
+        cache = self.cls(self.torch, self.catalog, 'cuda', gpu_keys * 384, host_keys * 384, **options)
+        self.addCleanup(cache.close)
+        return cache
+
+    def content(self, entry):
+        self.torch.cuda.synchronize()
+        return [bytes(tensor.cpu().numpy().tobytes()) for tensor in entry.tensors]
+
+    def test_async_matches_blocking(self):
+        for flag in (True, False):
+            cache = self.make(gpu_keys=2, host_keys=6, io_threads=2, gpu_policy='lru', async_upload=flag)
+            self.assertEqual(cache.async_upload, flag)
+            seen = []
+            cache.inspect = lambda key, tensors: seen.append(key) or {'marker': key}
+            keys = [self.key(cache, 2, e) for e in range(5)]
+            truth = {key: self.expected(cache, key) for key in keys}
+            for _ in range(3):  # disk, then host-tier hits (staged in the background), then again
+                for position, key in enumerate(keys):
+                    cache.prefetch(keys[position:])  # as streamed_moe does before every get()
+                    entry = cache.get(key, (key,))
+                    # Work on the main stream right after get() must see the uploaded bytes.
+                    doubled = [tensor.to(self.torch.int32) * 2 for tensor in entry.tensors]
+                    self.assertEqual(self.content(entry), truth[key])
+                    self.torch.cuda.synchronize()
+                    self.assertEqual([bytes((d // 2).to(self.torch.uint8).cpu().numpy().tobytes()) for d in doubled],
+                                     truth[key])
+                    if flag:
+                        self.assertEqual(entry.marker, key)
+            if flag:
+                self.assertGreater(cache.host_hits, 0)
+                self.assertEqual(cache.staged_uploads, cache.disk_reads + cache.host_hits)
+                self.assertEqual(cache.blocking_stages, 0)  # every upload was staged off the main thread
+                self.assertFalse(cache.staged)
+            else:
+                self.assertEqual((cache.staged_uploads, seen), (0, []))
+
+    def test_env_switch(self):
+        import os
+        self.assertFalse(self.make(gpu_keys=1).async_upload)  # off by default (measured slower)
+        os.environ['FRUSTUM_ASYNC_UPLOAD'] = '1'
+        try:
+            self.assertTrue(self.make(gpu_keys=1).async_upload)
+        finally:
+            del os.environ['FRUSTUM_ASYNC_UPLOAD']
+        cpu = self.cls(self.torch, self.catalog, 'cpu', 384, async_upload=True)
+        self.addCleanup(cpu.close)
+        self.assertFalse(cpu.async_upload)  # pinned uploads only make sense with a GPU
+
+
 class FusedFallbackTests(unittest.TestCase):
     """No GPU here: the fused path must hand every call to the reference unchanged."""
 

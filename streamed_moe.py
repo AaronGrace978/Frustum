@@ -92,6 +92,7 @@ class StreamedMoE:
         self.cache=TieredExpertCache(torch,catalog,torch.device('cuda:0'),cache_mib*MIB,host_cache_mib*MIB,
             io_threads=io_threads,gpu_policy=gpu_policy,host_policy=host_policy,pinned=pinned,
             cap_bytes=cap_bytes,headroom_bytes=headroom_bytes)
+        self.cache.inspect=self._inspect  # v0.8: NaN-scale check on the CPU, off the main thread
         # How many upcoming experts to read in the background while the GPU works.
         self.lookahead=max(1,2*io_threads) if lookahead is None else lookahead
         self._last_layer=None
@@ -118,6 +119,18 @@ class StreamedMoE:
                 if n not in self.catalog.tensors: raise ValueError('Missing '+n)
             self.cache.plan[key]=names
         return key
+
+    def _inspect(self,key,tensors):
+        """v0.8, runs in a staging thread on CPU bytes: the same E8M0 NaN test (byte 255) that
+        _linear does on the GPU at first use. Scales that pass are marked checked on the Entry,
+        so first use needs no GPU synchronisation. Scales that fail are left unmarked, and
+        _linear raises exactly as before."""
+        ok=set()
+        for i in (0,2,4):
+            si=self.catalog.tensors[self.cache.plan[key][i+1]]
+            if si.dtype=='F8_E8M0' and not bool((tensors[i+1]==255).any()):
+                ok.add(i)
+        return {'scales_ok':ok}
 
     def _confident(self,source):
         st=self.sources[source]
@@ -228,7 +241,7 @@ class StreamedMoE:
         weight=self._router_tensor(prefix+'weight'); bias=self._router_tensor(prefix+'bias')
         weights,ids=route(x,weight,bias,cfg)
         ids_cpu=ids.cpu()
-        x_cpu=x.cpu()
+        x_cpu=x.cpu() if validate else None
         if validate:
             wr,ir=route_reference(x_cpu,weight.cpu(),bias.cpu(),cfg)
             if not torch.equal(ids_cpu,ir): raise AssertionError('GPU and CPU selected different experts')
@@ -244,18 +257,28 @@ class StreamedMoE:
         self._score(layer,{int(e) for e in ids_cpu.flatten().tolist()})
         self.cache.prefetch(keys[:1+self.lookahead])
         y=torch.zeros_like(x,dtype=torch.float32)
-        yr=torch.zeros_like(x_cpu,dtype=torch.float32)
+        yr=torch.zeros_like(x_cpu,dtype=torch.float32) if validate else None
+        # v0.8: every expert's (rows, cols) in one pinned, non-blocking upload. One small
+        # pageable copy per expert made the CPU wait for all queued GPU work each time.
+        where,parts,offset={},[],0
+        for key in keys:
+            if key[1]=='shared': continue
+            rows,cols=torch.where(ids_cpu==key[1])
+            where[key]=(rows,cols,offset); parts+=[rows,cols]; offset+=2*rows.numel()
+        packed=torch.cat(parts).pin_memory().to(x.device,non_blocking=True) if parts else None
+        all_rows=torch.arange(x.shape[0],device=x.device)
         for pos,key in enumerate(keys):
             # The selected experts are known exactly after routing; read the next few in the background.
             self.cache.prefetch(keys[pos:pos+1+self.lookahead])
             entry=self.cache.get(key,(key,))
             if key[1]=='shared':
                 rows=torch.arange(x.shape[0]);cols=None
+                rows_gpu=all_rows;coeff=None
             else:
-                rows,cols=torch.where(ids_cpu==key[1])
-            # Small index/mix tensors prepared before dispatching compute.
-            rows_gpu=rows.to(x.device)
-            coeff=None if cols is None else weights[rows_gpu,cols.to(x.device),None]
+                rows,cols,start=where[key]
+                n=rows.numel()
+                rows_gpu=packed[start:start+n]
+                coeff=weights[rows_gpu,packed[start+n:start+2*n],None]
             part=expert_forward(x[rows_gpu],coeff,
                 lambda z,w:self._linear(entry,key,z,w),cfg['swiglu_limit'])
             y.index_add_(0,rows_gpu,part.float())

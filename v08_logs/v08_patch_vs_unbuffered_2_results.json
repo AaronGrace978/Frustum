@@ -1,0 +1,1030 @@
+{
+  "prompt": "Do you like Dino Buddies? Reply in one short sentence.",
+  "tokens": 24,
+  "runs_per_cell": 3,
+  "configs": [
+    "patch",
+    "unbuffered"
+  ],
+  "note": "physical_bytes is device-wide for the model drive; other programs reading it are included",
+  "report": {
+    "patch": {
+      "cold": {
+        "ttft_seconds": {
+          "median": 62.9681000999999,
+          "p95": 62.98283912999982,
+          "min": 61.94302340000013,
+          "max": 62.98447679999981,
+          "n": 3
+        },
+        "seconds_per_token": {
+          "median": 5.694076713333258,
+          "p95": 5.729873727333317,
+          "min": 5.572731073333307,
+          "max": 5.733851173333323,
+          "n": 3
+        },
+        "process_seconds": {
+          "median": 155.4264294999998,
+          "p95": 155.6315734299998,
+          "min": 151.59522370000013,
+          "max": 155.6543671999998,
+          "n": 3
+        },
+        "physical_bytes": {
+          "median": 106249286144,
+          "p95": 106778588211.2,
+          "min": 105957403648,
+          "max": 106837399552,
+          "n": 3
+        },
+        "logical_bytes": {
+          "median": 83726099520,
+          "p95": 84149113920.0,
+          "min": 83707298880,
+          "max": 84196115520,
+          "n": 3
+        },
+        "physical_over_logical": {
+          "median": 1.2689112661809412,
+          "p95": 1.2692569514511698,
+          "min": 1.2655241824885144,
+          "max": 1.2692953609256397,
+          "n": 3
+        },
+        "unique_expert_bytes_per_token": {
+          "median": 1112997888.0,
+          "p95": 1112997888.0,
+          "min": 1112997888.0,
+          "max": 1112997888.0,
+          "n": 3
+        },
+        "repeat_expert_bytes_per_token": {
+          "median": 1288470528.0,
+          "p95": 1316671488.0,
+          "min": 1287217152.0,
+          "max": 1319804928.0,
+          "n": 3
+        },
+        "reread_amplification": {
+          "median": 2.1576576576576576,
+          "p95": 2.1829954954954958,
+          "min": 2.1565315315315314,
+          "max": 2.185810810810811,
+          "n": 3
+        },
+        "gpu_hit_rate": {
+          "median": 0.31023809523809526,
+          "p95": 0.31023809523809526,
+          "min": 0.31023809523809526,
+          "max": 0.31023809523809526,
+          "n": 3
+        },
+        "host_hit_rate": {
+          "median": 0.23357142857142857,
+          "p95": 0.23378571428571426,
+          "min": 0.2276190476190476,
+          "max": 0.2338095238095238,
+          "n": 3
+        },
+        "spill_hit_rate": {
+          "median": 0.0,
+          "p95": 0.0,
+          "min": 0.0,
+          "max": 0.0,
+          "n": 3
+        },
+        "drive_hit_rate": {
+          "median": 0.4561904761904762,
+          "p95": 0.46154761904761904,
+          "min": 0.45595238095238094,
+          "max": 0.46214285714285713,
+          "n": 3
+        },
+        "effective_MBps": {
+          "median": 580.1911365718541,
+          "p95": 588.1222504109585,
+          "min": 579.5658996996871,
+          "max": 589.0034852819701,
+          "n": 3
+        },
+        "mean_queue_depth": {
+          "median": 2.5091729874698765,
+          "p95": 2.5418527383614413,
+          "min": 2.5005821486317683,
+          "max": 2.5454838217938374,
+          "n": 3
+        },
+        "drive_utilization": {
+          "median": 0.7312896108699571,
+          "p95": 0.7315950876077828,
+          "min": 0.7273174613722233,
+          "max": 0.7316290294675413,
+          "n": 3
+        },
+        "overlap_fraction": {
+          "median": 0.2297635261190912,
+          "p95": 0.23071964432303335,
+          "min": 0.215293559028335,
+          "max": 0.23082587967902693,
+          "n": 3
+        },
+        "runs": 3,
+        "flags": []
+      },
+      "warm": {
+        "ttft_seconds": {
+          "median": 62.05329810000012,
+          "p95": 62.226393840000014,
+          "min": 62.0341341999997,
+          "max": 62.2456267,
+          "n": 3
+        },
+        "seconds_per_token": {
+          "median": 5.6619636133333495,
+          "p95": 5.729462317333317,
+          "min": 5.656906060000135,
+          "max": 5.736962173333313,
+          "n": 3
+        },
+        "process_seconds": {
+          "median": 153.2498283,
+          "p95": 154.29937661999992,
+          "min": 152.9827049999999,
+          "max": 154.41599309999992,
+          "n": 3
+        },
+        "physical_bytes": {
+          "median": 106115364864,
+          "p95": 106720321536.0,
+          "min": 105640261632,
+          "max": 106787538944,
+          "n": 3
+        },
+        "logical_bytes": {
+          "median": 84290118720,
+          "p95": 84290118720.0,
+          "min": 83707298880,
+          "max": 84290118720,
+          "n": 3
+        },
+        "physical_over_logical": {
+          "median": 1.2669045976638529,
+          "p95": 1.2676163963984,
+          "min": 1.2532935442044184,
+          "max": 1.267695485146683,
+          "n": 3
+        },
+        "unique_expert_bytes_per_token": {
+          "median": 1112997888.0,
+          "p95": 1112997888.0,
+          "min": 1112997888.0,
+          "max": 1112997888.0,
+          "n": 3
+        },
+        "repeat_expert_bytes_per_token": {
+          "median": 1326071808.0,
+          "p95": 1326071808.0,
+          "min": 1287217152.0,
+          "max": 1326071808.0,
+          "n": 3
+        },
+        "reread_amplification": {
+          "median": 2.1914414414414414,
+          "p95": 2.1914414414414414,
+          "min": 2.1565315315315314,
+          "max": 2.1914414414414414,
+          "n": 3
+        },
+        "gpu_hit_rate": {
+          "median": 0.31023809523809526,
+          "p95": 0.31023809523809526,
+          "min": 0.31023809523809526,
+          "max": 0.31023809523809526,
+          "n": 3
+        },
+        "host_hit_rate": {
+          "median": 0.22642857142857142,
+          "p95": 0.23307142857142857,
+          "min": 0.22642857142857142,
+          "max": 0.2338095238095238,
+          "n": 3
+        },
+        "spill_hit_rate": {
+          "median": 0.0,
+          "p95": 0.0,
+          "min": 0.0,
+          "max": 0.0,
+          "n": 3
+        },
+        "drive_hit_rate": {
+          "median": 0.4633333333333333,
+          "p95": 0.4633333333333333,
+          "min": 0.45595238095238094,
+          "max": 0.4633333333333333,
+          "n": 3
+        },
+        "effective_MBps": {
+          "median": 583.8844994970142,
+          "p95": 592.0893505619275,
+          "min": 583.4472525470513,
+          "max": 593.0010006802512,
+          "n": 3
+        },
+        "mean_queue_depth": {
+          "median": 2.5202129973440823,
+          "p95": 2.540366965714608,
+          "min": 2.5123406220822866,
+          "max": 2.542606295533555,
+          "n": 3
+        },
+        "drive_utilization": {
+          "median": 0.727092755246002,
+          "p95": 0.728035861688183,
+          "min": 0.7265767216010032,
+          "max": 0.7281406512928698,
+          "n": 3
+        },
+        "overlap_fraction": {
+          "median": 0.22359998509328974,
+          "p95": 0.2314382073959987,
+          "min": 0.22276609341181666,
+          "max": 0.2323091209851886,
+          "n": 3
+        },
+        "runs": 3,
+        "flags": []
+      }
+    },
+    "unbuffered": {
+      "cold": {
+        "ttft_seconds": {
+          "median": 58.14428050000015,
+          "p95": 58.6730636199999,
+          "min": 57.91749540000001,
+          "max": 58.731817299999875,
+          "n": 3
+        },
+        "seconds_per_token": {
+          "median": 4.064832513333386,
+          "p95": 4.109640819333363,
+          "min": 4.054976959999976,
+          "max": 4.114619520000027,
+          "n": 3
+        },
+        "process_seconds": {
+          "median": 126.54027449999967,
+          "p95": 126.96290946000008,
+          "min": 125.31884850000006,
+          "max": 127.00986890000013,
+          "n": 3
+        },
+        "physical_bytes": {
+          "median": 78984417792,
+          "p95": 79425081292.8,
+          "min": 78796925952,
+          "max": 79474043904,
+          "n": 3
+        },
+        "logical_bytes": {
+          "median": 78913135680,
+          "p95": 79353070656.0,
+          "min": 78725129280,
+          "max": 79401952320,
+          "n": 3
+        },
+        "physical_over_logical": {
+          "median": 1.000907932133828,
+          "p95": 1.000911585829298,
+          "min": 1.0009032984354982,
+          "max": 1.0009119917954614,
+          "n": 3
+        },
+        "unique_expert_bytes_per_token": {
+          "median": 1112997888.0,
+          "p95": 1112997888.0,
+          "min": 1112997888.0,
+          "max": 1112997888.0,
+          "n": 3
+        },
+        "repeat_expert_bytes_per_token": {
+          "median": 967606272.0,
+          "p95": 996935270.4,
+          "min": 955072512.0,
+          "max": 1000194048.0,
+          "n": 3
+        },
+        "reread_amplification": {
+          "median": 1.8693693693693694,
+          "p95": 1.8957207207207207,
+          "min": 1.8581081081081081,
+          "max": 1.8986486486486487,
+          "n": 3
+        },
+        "gpu_hit_rate": {
+          "median": 0.31023809523809526,
+          "p95": 0.31023809523809526,
+          "min": 0.31023809523809526,
+          "max": 0.31023809523809526,
+          "n": 3
+        },
+        "host_hit_rate": {
+          "median": 0.2945238095238095,
+          "p95": 0.29666666666666663,
+          "min": 0.28833333333333333,
+          "max": 0.2969047619047619,
+          "n": 3
+        },
+        "spill_hit_rate": {
+          "median": 0.0,
+          "p95": 0.0,
+          "min": 0.0,
+          "max": 0.0,
+          "n": 3
+        },
+        "drive_hit_rate": {
+          "median": 0.3952380952380952,
+          "p95": 0.4008095238095238,
+          "min": 0.39285714285714285,
+          "max": 0.4014285714285714,
+          "n": 3
+        },
+        "effective_MBps": {
+          "median": 862.5443933276111,
+          "p95": 866.0598892269612,
+          "min": 860.8498228841543,
+          "max": 866.4504998824445,
+          "n": 3
+        },
+        "mean_queue_depth": {
+          "median": 2.8578763078905594,
+          "p95": 2.863074343125197,
+          "min": 2.84277440688117,
+          "max": 2.863651902595712,
+          "n": 3
+        },
+        "drive_utilization": {
+          "median": 0.5921848805440805,
+          "p95": 0.5951019021301096,
+          "min": 0.5910105977190946,
+          "max": 0.5954260156396685,
+          "n": 3
+        },
+        "overlap_fraction": {
+          "median": 0.22894043993310406,
+          "p95": 0.23015568105744894,
+          "min": 0.22575211514873153,
+          "max": 0.23029070784904282,
+          "n": 3
+        },
+        "runs": 3,
+        "flags": []
+      },
+      "warm": {
+        "ttft_seconds": {
+          "median": 57.74543500000004,
+          "p95": 59.012832730000056,
+          "min": 57.65247709999994,
+          "max": 59.15365470000006,
+          "n": 3
+        },
+        "seconds_per_token": {
+          "median": 4.120732833333387,
+          "p95": 4.185996429333318,
+          "min": 4.080462213333309,
+          "max": 4.193247939999977,
+          "n": 3
+        },
+        "process_seconds": {
+          "median": 126.69049229999996,
+          "p95": 128.10746247000023,
+          "min": 125.03689439999971,
+          "max": 128.26490360000025,
+          "n": 3
+        },
+        "physical_bytes": {
+          "median": 79081630208,
+          "p95": 79112286771.2,
+          "min": 78777134080,
+          "max": 79115693056,
+          "n": 3
+        },
+        "logical_bytes": {
+          "median": 79007138880,
+          "p95": 79040980032.0,
+          "min": 78706328640,
+          "max": 79044740160,
+          "n": 3
+        },
+        "physical_over_logical": {
+          "median": 1.0008996155864907,
+          "p95": 1.000938520260437,
+          "min": 1.0008976295684746,
+          "max": 1.0009428430019867,
+          "n": 3
+        },
+        "unique_expert_bytes_per_token": {
+          "median": 1112997888.0,
+          "p95": 1112997888.0,
+          "min": 1112997888.0,
+          "max": 1112997888.0,
+          "n": 3
+        },
+        "repeat_expert_bytes_per_token": {
+          "median": 973873152.0,
+          "p95": 976129228.8,
+          "min": 953819136.0,
+          "max": 976379904.0,
+          "n": 3
+        },
+        "reread_amplification": {
+          "median": 1.875,
+          "p95": 1.877027027027027,
+          "min": 1.856981981981982,
+          "max": 1.8772522522522523,
+          "n": 3
+        },
+        "gpu_hit_rate": {
+          "median": 0.31023809523809526,
+          "p95": 0.31023809523809526,
+          "min": 0.31023809523809526,
+          "max": 0.31023809523809526,
+          "n": 3
+        },
+        "host_hit_rate": {
+          "median": 0.29333333333333333,
+          "p95": 0.2967619047619048,
+          "min": 0.29285714285714287,
+          "max": 0.29714285714285715,
+          "n": 3
+        },
+        "spill_hit_rate": {
+          "median": 0.0,
+          "p95": 0.0,
+          "min": 0.0,
+          "max": 0.0,
+          "n": 3
+        },
+        "drive_hit_rate": {
+          "median": 0.3964285714285714,
+          "p95": 0.39685714285714285,
+          "min": 0.39261904761904765,
+          "max": 0.3969047619047619,
+          "n": 3
+        },
+        "effective_MBps": {
+          "median": 861.0367666584582,
+          "p95": 864.2289542168008,
+          "min": 855.0284808453473,
+          "max": 864.5836417232833,
+          "n": 3
+        },
+        "mean_queue_depth": {
+          "median": 2.8535775604003293,
+          "p95": 2.85970412699064,
+          "min": 2.8499973991637173,
+          "max": 2.8603848566117858,
+          "n": 3
+        },
+        "drive_utilization": {
+          "median": 0.5825133401636902,
+          "p95": 0.5912708480539971,
+          "min": 0.5820556224967565,
+          "max": 0.5922439044862534,
+          "n": 3
+        },
+        "overlap_fraction": {
+          "median": 0.22896047993656773,
+          "p95": 0.2336188988320293,
+          "min": 0.22691816335695095,
+          "max": 0.23413650093152502,
+          "n": 3
+        },
+        "runs": 3,
+        "flags": []
+      }
+    },
+    "_token_ids": {
+      "identical_within_each_config": true,
+      "identical_across_configs": true
+    }
+  },
+  "runs": [
+    {
+      "config": "patch",
+      "state": "cold",
+      "repetition": 0,
+      "metrics": {
+        "ttft_seconds": 62.9681000999999,
+        "seconds_per_token": 5.733851173333323,
+        "process_seconds": 155.6543671999998,
+        "physical_bytes": 106837399552,
+        "logical_bytes": 84196115520,
+        "physical_over_logical": 1.2689112661809412,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 1319804928.0,
+        "reread_amplification": 2.185810810810811,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.2276190476190476,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.46214285714285713,
+        "effective_MBps": 580.1911365718541,
+        "mean_queue_depth": 2.5454838217938374,
+        "drive_utilization": 0.7312896108699571,
+        "overlap_fraction": 0.23082587967902693
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "patch_cold_0.json"
+    },
+    {
+      "config": "patch",
+      "state": "warm",
+      "repetition": 0,
+      "metrics": {
+        "ttft_seconds": 62.2456267,
+        "seconds_per_token": 5.736962173333313,
+        "process_seconds": 154.41599309999992,
+        "physical_bytes": 106787538944,
+        "logical_bytes": 84290118720,
+        "physical_over_logical": 1.2669045976638529,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 1326071808.0,
+        "reread_amplification": 2.1914414414414414,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.22642857142857142,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.4633333333333333,
+        "effective_MBps": 583.8844994970142,
+        "mean_queue_depth": 2.542606295533555,
+        "drive_utilization": 0.7281406512928698,
+        "overlap_fraction": 0.22276609341181666
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "patch_warm_0.json"
+    },
+    {
+      "config": "unbuffered",
+      "state": "cold",
+      "repetition": 0,
+      "metrics": {
+        "ttft_seconds": 57.91749540000001,
+        "seconds_per_token": 4.054976959999976,
+        "process_seconds": 125.31884850000006,
+        "physical_bytes": 78984417792,
+        "logical_bytes": 78913135680,
+        "physical_over_logical": 1.0009032984354982,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 967606272.0,
+        "reread_amplification": 1.8693693693693694,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.2945238095238095,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.3952380952380952,
+        "effective_MBps": 866.4504998824445,
+        "mean_queue_depth": 2.8578763078905594,
+        "drive_utilization": 0.5921848805440805,
+        "overlap_fraction": 0.22894043993310406
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "unbuffered_cold_0.json"
+    },
+    {
+      "config": "unbuffered",
+      "state": "warm",
+      "repetition": 0,
+      "metrics": {
+        "ttft_seconds": 57.74543500000004,
+        "seconds_per_token": 4.193247939999977,
+        "process_seconds": 126.69049229999996,
+        "physical_bytes": 79081630208,
+        "logical_bytes": 79007138880,
+        "physical_over_logical": 1.0009428430019867,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 973873152.0,
+        "reread_amplification": 1.875,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.29333333333333333,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.3964285714285714,
+        "effective_MBps": 855.0284808453473,
+        "mean_queue_depth": 2.8535775604003293,
+        "drive_utilization": 0.5820556224967565,
+        "overlap_fraction": 0.23413650093152502
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "unbuffered_warm_0.json"
+    },
+    {
+      "config": "patch",
+      "state": "cold",
+      "repetition": 1,
+      "metrics": {
+        "ttft_seconds": 61.94302340000013,
+        "seconds_per_token": 5.572731073333307,
+        "process_seconds": 151.59522370000013,
+        "physical_bytes": 105957403648,
+        "logical_bytes": 83726099520,
+        "physical_over_logical": 1.2655241824885144,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 1288470528.0,
+        "reread_amplification": 2.1576576576576576,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.23357142857142857,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.4561904761904762,
+        "effective_MBps": 589.0034852819701,
+        "mean_queue_depth": 2.5005821486317683,
+        "drive_utilization": 0.7316290294675413,
+        "overlap_fraction": 0.215293559028335
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "patch_cold_1.json"
+    },
+    {
+      "config": "patch",
+      "state": "warm",
+      "repetition": 1,
+      "metrics": {
+        "ttft_seconds": 62.0341341999997,
+        "seconds_per_token": 5.6619636133333495,
+        "process_seconds": 152.9827049999999,
+        "physical_bytes": 106115364864,
+        "logical_bytes": 83707298880,
+        "physical_over_logical": 1.267695485146683,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 1287217152.0,
+        "reread_amplification": 2.1565315315315314,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.2338095238095238,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.45595238095238094,
+        "effective_MBps": 583.4472525470513,
+        "mean_queue_depth": 2.5123406220822866,
+        "drive_utilization": 0.7265767216010032,
+        "overlap_fraction": 0.22359998509328974
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "patch_warm_1.json"
+    },
+    {
+      "config": "unbuffered",
+      "state": "cold",
+      "repetition": 1,
+      "metrics": {
+        "ttft_seconds": 58.731817299999875,
+        "seconds_per_token": 4.064832513333386,
+        "process_seconds": 127.00986890000013,
+        "physical_bytes": 78796925952,
+        "logical_bytes": 78725129280,
+        "physical_over_logical": 1.0009119917954614,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 955072512.0,
+        "reread_amplification": 1.8581081081081081,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.2969047619047619,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.39285714285714285,
+        "effective_MBps": 860.8498228841543,
+        "mean_queue_depth": 2.84277440688117,
+        "drive_utilization": 0.5910105977190946,
+        "overlap_fraction": 0.22575211514873153
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "unbuffered_cold_1.json"
+    },
+    {
+      "config": "unbuffered",
+      "state": "warm",
+      "repetition": 1,
+      "metrics": {
+        "ttft_seconds": 59.15365470000006,
+        "seconds_per_token": 4.120732833333387,
+        "process_seconds": 128.26490360000025,
+        "physical_bytes": 78777134080,
+        "logical_bytes": 78706328640,
+        "physical_over_logical": 1.0008996155864907,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 953819136.0,
+        "reread_amplification": 1.856981981981982,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.29714285714285715,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.39261904761904765,
+        "effective_MBps": 861.0367666584582,
+        "mean_queue_depth": 2.8499973991637173,
+        "drive_utilization": 0.5825133401636902,
+        "overlap_fraction": 0.22691816335695095
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "unbuffered_warm_1.json"
+    },
+    {
+      "config": "patch",
+      "state": "cold",
+      "repetition": 2,
+      "metrics": {
+        "ttft_seconds": 62.98447679999981,
+        "seconds_per_token": 5.694076713333258,
+        "process_seconds": 155.4264294999998,
+        "physical_bytes": 106249286144,
+        "logical_bytes": 83707298880,
+        "physical_over_logical": 1.2692953609256397,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 1287217152.0,
+        "reread_amplification": 2.1565315315315314,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.2338095238095238,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.45595238095238094,
+        "effective_MBps": 579.5658996996871,
+        "mean_queue_depth": 2.5091729874698765,
+        "drive_utilization": 0.7273174613722233,
+        "overlap_fraction": 0.2297635261190912
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "patch_cold_2.json"
+    },
+    {
+      "config": "patch",
+      "state": "warm",
+      "repetition": 2,
+      "metrics": {
+        "ttft_seconds": 62.05329810000012,
+        "seconds_per_token": 5.656906060000135,
+        "process_seconds": 153.2498283,
+        "physical_bytes": 105640261632,
+        "logical_bytes": 84290118720,
+        "physical_over_logical": 1.2532935442044184,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 1326071808.0,
+        "reread_amplification": 2.1914414414414414,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.22642857142857142,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.4633333333333333,
+        "effective_MBps": 593.0010006802512,
+        "mean_queue_depth": 2.5202129973440823,
+        "drive_utilization": 0.727092755246002,
+        "overlap_fraction": 0.2323091209851886
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "patch_warm_2.json"
+    },
+    {
+      "config": "unbuffered",
+      "state": "cold",
+      "repetition": 2,
+      "metrics": {
+        "ttft_seconds": 58.14428050000015,
+        "seconds_per_token": 4.114619520000027,
+        "process_seconds": 126.54027449999967,
+        "physical_bytes": 79474043904,
+        "logical_bytes": 79401952320,
+        "physical_over_logical": 1.000907932133828,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 1000194048.0,
+        "reread_amplification": 1.8986486486486487,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.28833333333333333,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.4014285714285714,
+        "effective_MBps": 862.5443933276111,
+        "mean_queue_depth": 2.863651902595712,
+        "drive_utilization": 0.5954260156396685,
+        "overlap_fraction": 0.23029070784904282
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "unbuffered_cold_2.json"
+    },
+    {
+      "config": "unbuffered",
+      "state": "warm",
+      "repetition": 2,
+      "metrics": {
+        "ttft_seconds": 57.65247709999994,
+        "seconds_per_token": 4.080462213333309,
+        "process_seconds": 125.03689439999971,
+        "physical_bytes": 79115693056,
+        "logical_bytes": 79044740160,
+        "physical_over_logical": 1.0008976295684746,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 976379904.0,
+        "reread_amplification": 1.8772522522522523,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.29285714285714287,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.3969047619047619,
+        "effective_MBps": 864.5836417232833,
+        "mean_queue_depth": 2.8603848566117858,
+        "drive_utilization": 0.5922439044862534,
+        "overlap_fraction": 0.22896047993656773
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "unbuffered_warm_2.json"
+    }
+  ]
+}

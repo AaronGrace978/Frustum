@@ -33,6 +33,8 @@ Configurations
             OS cache between processes. Default for frustum_chat.py on Windows since v0.8, so
             patch and unbuffered are the same there.
   direct    patch + --reader direct: the v0.7 buffered reader, for A/B runs against v0.8.
+  async_upload patch with FRUSTUM_ASYNC_UPLOAD=1: v0.8 pinned staging and copy-stream
+            uploads (opt-in; measured slower than the default blocking uploads).
   v06       frustum_chat.py from --baseline-dir. It has no I/O ledger, so only timings,
             token ids and physical device bytes are available for it.
 
@@ -59,6 +61,7 @@ CONFIGS = {
     'spill': (['--predict-next', '0'], {}),
     'unbuffered': (['--predict-next', '0', '--reader', 'unbuffered'], {}),
     'direct': (['--predict-next', '0', '--reader', 'direct'], {}),
+    'async_upload': (['--predict-next', '0'], {'FRUSTUM_ASYNC_UPLOAD': '1'}),
     'v06': (['--predict-next', '0'], {}),
 }
 

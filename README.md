@@ -2,9 +2,9 @@
 
 Streaming inference for checkpoints far larger than GPU memory. The reference target is DeepSeek-V4.1-Flash (about 510 GB on disk) on one 16 GB GPU, read from an external SSD.
 
-Current code: v0.7 (measured I/O and roofline tooling, safer cache behaviour, and optional spill storage; real-GPU v0.7 benchmarks are still pending, see below). Live v0.5.1 benchmarks from a first test session are below. The numbers under "History and recorded evidence" were measured with v0.4. Run the verification and benchmark steps below to get current numbers for your machine.
+Current code: v0.8 (unbuffered reads and a larger RAM tier: DeepSeek decode **5.69 → 4.06 s/token** measured on an RTX 5060 Ti with the checkpoint on a USB SSD; see below). Live v0.5.1 benchmarks from a first test session are further down. The numbers under "History and recorded evidence" were measured with v0.4. Run the verification and benchmark steps below to get current numbers for your machine.
 
-**Whitepaper:** [`whitepaper/Frustum_loader_Whitepaper_v0.7.0.pdf`](whitepaper/Frustum_loader_Whitepaper_v0.7.0.pdf) documents the v0.6 design, v0.5.1 live benchmarks, and v0.7's I/O/roofline work and validation status. The detailed v0.7 implementation and its recorded sandbox/replay evidence are in [`CHANGES_v0.7.md`](CHANGES_v0.7.md) and `v07_logs/`. Rebuild the current whitepaper with `python whitepaper/build_whitepaper.py`. Earlier editions are in `whitepaper/archive/`.
+**Whitepaper:** [`whitepaper/Frustum_loader_Whitepaper_v0.8.0.pdf`](whitepaper/Frustum_loader_Whitepaper_v0.8.0.pdf) documents the design, the v0.5.1 live benchmarks, v0.7's I/O/roofline tooling and v0.8's measured results. Details and evidence: [`CHANGES_v0.8.md`](CHANGES_v0.8.md) and `v08_logs/`; [`CHANGES_v0.7.md`](CHANGES_v0.7.md) and `v07_logs/`. Rebuild the current whitepaper with `python whitepaper/build_whitepaper.py`. Earlier editions are in `whitepaper/archive/`.
 
 ## Quick start
 
@@ -21,9 +21,22 @@ The launchers look for Python in this order: `FRUSTUM_PYTHON`, `.venv\Scripts\py
 
 The model folder defaults to the parent of this folder. Set `FRUSTUM_MODEL` or pass `--model` to point elsewhere. Weights and the CUDA environment are not bundled.
 
+## What v0.8 changes
+
+v0.8 is the first release measured end to end on the target machine (RTX 5060 Ti 16 GB, 32 GB RAM, DeepSeek V4.1 Flash on a Samsung T7 at a 10 Gbps USB port). Every number here is a `bench_e2e.py` median over 3 or more fresh-process runs, with token ids identical across configurations. Full tables: [`CHANGES_v0.8.md`](CHANGES_v0.8.md).
+
+- **Unbuffered reads, on by default on Windows.** `--reader unbuffered` (or `FRUSTUM_READER`) reads the checkpoint with `FILE_FLAG_NO_BUFFERING`. Buffered reads made Windows read 27% more than requested and keep a second copy of every expert in its file cache, which with 32 GB of RAM never produced a warm-cache benefit. Unbuffered reads fetch exactly the requested bytes (863 vs 580 MB/s effective) and let the automatic host RAM tier take 85% of spare RAM instead of 50%. **Decode 5.69 → 4.06 s/token (−29%), time to first token 63.0 → 58.1 s.** `--reader direct` restores v0.7.
+- **Where the rest goes.** `tools/profile_decode.py` shows each decode token spends about 2.8 s waiting for expert reads and about 2 s on GPU work (expert calls, attention, hyper-connection mixes), alternating layer by layer: the drive idles while the GPU works and vice versa.
+- **Measured and left off.** Pinned staging with copy-stream uploads (`FRUSTUM_ASYNC_UPLOAD=1`) measured 4.33 s/token, and gated next-layer prefetch 4.42 s/token, both slower than the 4.07 s/token default. The next-layer router guess is right 72% of the time, which doubles read/compute overlap but wastes about 0.37 GB/token on wrong guesses. Both stay available for A/B runs.
+- **Check the drive link first.** The same T7 measured about 42 MB/s on one port and 909 MB/s on a 10 Gbps port. Four parallel reads reach the drive's ceiling; more do not help.
+
+    .\run_bench.ps1 --configs direct patch             # v0.7 buffered reader vs v0.8 default
+    .\run_bench.ps1 --configs patch async_upload gated  # the opt-in experiments
+    python tools\profile_decode.py --prompt "Say hello." --max-new-tokens 24
+
 ## What v0.7 changes
 
-v0.7 is a measurement-and-I/O release. It does not change model weights, routing decisions, attention, or the reference path. Its purpose is to show whether a decode step is actually limited by the checkpoint drive or the GPU before spending effort on the wrong optimization. The new GPU and Windows-specific paths were byte-compiled and exercised in a no-GPU sandbox, but have **not** yet run against the real DeepSeek checkpoint; no v0.7 speed claim is made.
+v0.7 is a measurement-and-I/O release. It does not change model weights, routing decisions, attention, or the reference path. Its purpose is to show whether a decode step is actually limited by the checkpoint drive or the GPU before spending effort on the wrong optimization. The new paths were first exercised in a no-GPU sandbox; the v0.8 section above has the first measurements on the real checkpoint (v0.7 defaults: 5.69 s/token).
 
 - **End-to-end I/O accounting.** `io_ledger.py` records logical expert bytes, first-time versus repeated reads, queue depth, drive-busy time, blocking, overlap, and speculative-read waste. `os_cache.py` also collects best-effort physical device read counters, so buffered Windows reads are not mistaken for physical disk traffic.
 - **Roofline and reproducible benchmarks.** `bench_e2e.py`, `run_bench.ps1`, and `roofline.py` run cold/warm configurations at least three times and report median/p95 latency, logical/physical bytes, effective throughput, drive utilisation, and whether the run appears storage- or compute-bound. Routing traces can now be replayed with `decode_cache_replay.py`.
@@ -327,4 +340,4 @@ Start interactive text chat with `.\run_chat.ps1`, or run one prompt with `.\run
 
 - **Aaron Grace** — Architecture, original engine (v0.1–v0.4), layer-0 block, MoE pipeline, sparse attention, GGUF backends, ActivatePrime
 - **OpenAI** — Codex environment and tooling used during development
-- **Claude (Anthropic)** — v0.5 to v0.6 engineering: fused decode kernels, next-layer expert prediction, I/O rewrite, tiered expert cache, placement planner, generation control flow, cache policy, batched attention, expert decode, GLM cache migration, verification harness, ActivatePrime integration
+- **Claude (Anthropic)** — v0.5 to v0.8 engineering: unbuffered reader and v0.8 measurements, I/O ledger and roofline tooling, fused decode kernels, next-layer expert prediction, I/O rewrite, tiered expert cache, placement planner, generation control flow, cache policy, batched attention, expert decode, GLM cache migration, verification harness, ActivatePrime integration

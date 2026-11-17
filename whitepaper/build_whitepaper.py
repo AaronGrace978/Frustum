@@ -1,4 +1,4 @@
-"""Build Frustum_loader_Whitepaper_v0.7.0.pdf from this script and whitepaper/assets.
+"""Build Frustum_loader_Whitepaper_v0.8.0.pdf from this script and whitepaper/assets.
 
 Run from the repo root:  python whitepaper/build_whitepaper.py
 Needs reportlab and pypdf. Evidence JSONs in the repo root are embedded as attachments.
@@ -18,8 +18,8 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph, Prefo
 ROOT = Path(__file__).resolve().parent.parent
 WP = ROOT / 'whitepaper'
 A = WP / 'assets'
-OUT = WP / 'Frustum_loader_Whitepaper_v0.7.0.pdf'
-VERSION = 'Version 0.7.0 | November 15, 2026'
+OUT = WP / 'Frustum_loader_Whitepaper_v0.8.0.pdf'
+VERSION = 'Version 0.8.0 | November 16, 2026'
 
 FONT_DIRS = [Path('/usr/share/fonts/truetype/dejavu'), Path('C:/Windows/Fonts')]
 
@@ -113,7 +113,7 @@ def on_page(canvas, doc):
     canvas.setStrokeColor(TEAL)
     canvas.setLineWidth(1.6)
     canvas.line(0.75 * inch, h - 0.66 * inch, w - 0.75 * inch, h - 0.66 * inch)
-    canvas.drawString(0.75 * inch, 0.5 * inch, f'{VERSION} | Live v0.5.1 benchmarks; v0.7 measurement plan')
+    canvas.drawString(0.75 * inch, 0.5 * inch, f'{VERSION} | Measured v0.8 benchmarks; live v0.5.1 runs')
     canvas.drawRightString(w - 0.75 * inch, 0.5 * inch, str(doc.page))
     canvas.restoreState()
 
@@ -126,7 +126,7 @@ def story():
           P(f'Technical whitepaper | {VERSION}'),
           P('Project concept, architecture and direction: <b>Aaron Grace</b>. '
             'Engineering contributors: <b>OpenAI</b> (ChatGPT and Codex, v0.1 to v0.4 implementation and analysis) and '
-            '<b>Claude / Anthropic</b> (v0.5-v0.7 I/O, placement, cache and measurement engineering). '
+            '<b>Claude / Anthropic</b> (v0.5-v0.8 I/O, placement, cache and measurement engineering). '
             f'Contributor: Dino Buddy {DINO}. The project also received assistance from DinoClaw, '
             'Aaron Grace\u2019s original agent runtime.'),
           P('The project was previously published as <i>Frusium_loader</i>. The name is now Frustum_loader: '
@@ -140,8 +140,15 @@ def story():
             'first six tokens in 1,118 s. Version 0.5.1, with the drive on a USB 3.x link, produces about one token '
             'every 8 s. Version 0.6 adds fused decode kernels for all three backends and next-layer expert '
             'prediction for DeepSeek. Version 0.7 adds end-to-end I/O accounting, roofline reporting, safer cache '
-            'behaviour and an opt-in verified spill tier (Section 16). Phi-4 now runs about sixteen times faster per '
-            'token; prediction is off by default after a slower first DeepSeek test. No v0.7 GPU benchmark is claimed yet.'),
+            'behaviour and an opt-in verified spill tier (Section 16). Version 0.8 is the first release measured end to '
+            'end on the target machine: unbuffered reads and a larger RAM tier take DeepSeek decode from 5.69 to '
+            '4.06 s/token, with identical token ids (Section 17). Two further ideas, asynchronous uploads and gated '
+            'next-layer prefetch, measured slower and stay off by default.'),
+          table([
+              ['DeepSeek V4.1 Flash, bench_e2e.py', 'Median of 3 cold + 3 warm fresh-process runs, T7 on a 10 Gbps port'],
+              ['v0.7 defaults (buffered reads)', '5.69 s/token decode, 63.0 s to first token'],
+              ['v0.8 defaults (unbuffered reads)', '4.06 s/token decode, 58.1 s to first token (29% faster decode)'],
+          ]),
           table([
               ['Checkpoint', 'Live result in ActivatePrime (v0.5.1, T7 on USB-C)'],
               ['DeepSeek V4.1 Flash (~510 GB)', '24 tokens in 192.2 s on the first turn (~8.0 s/token); 24 tokens in 227.1 s on the second turn (~9.5 s/token)'],
@@ -170,9 +177,10 @@ def story():
               ['14', 'v0.5.1 live benchmarks in ActivatePrime'],
               ['15', 'v0.6: fused decode kernels and next-layer prediction'],
               ['16', 'v0.7: I/O measurement, roofline and guarded data movement'],
-              ['17', 'Interpretation and limitations'],
-              ['18', 'Reproduction and integration'],
-              ['19', 'Contributors and references'],
+              ['17', 'v0.8: measured baseline, unbuffered reads and the per-layer stall'],
+              ['18', 'Interpretation and limitations'],
+              ['19', 'Reproduction and integration'],
+              ['20', 'Contributors and references'],
               ['A', 'Run evidence (embedded attachments)'],
           ], widths=(0.8 * inch, 5.9 * inch)),
           picture(A / 'deepseek_progress.png', 5.0 * inch,
@@ -601,22 +609,92 @@ def story():
           P('In the sandbox, 24 no-GPU v0.7 checks passed: ledger accounting, coalesced reads, cache protection, '
             'speculative-read accounting, asynchronous safety, RAM guard, spill integrity, prefix reuse and roofline '
             'verdicts. Five PyTorch-dependent numerical checks were skipped. GPU and Windows paths, actual shard '
-            'contiguity, full-model parity and performance effects remain unrun on the target machine; no v0.7 speed '
-            'claim is made in this report.'),
-          H1('17. Interpretation and limitations'),
+            'contiguity, full-model parity and performance effects were unrun when v0.7 was written. Section 17 '
+            'reports the first measurements on the target machine.'),
+          PageBreak()]
+
+    # ---------------------------------------------------------------- 17 (v0.8)
+    s += [H1('17. v0.8: measured baseline, unbuffered reads and the per-layer stall'),
+          P('Every number in this section was measured on the target machine on November 16, 2026: RTX 5060 Ti 16 GB, '
+            'Ryzen 7 3700X, 32 GB RAM, Windows 11, DeepSeek V4.1 Flash on a Samsung T7 connected to a 10 Gbps USB port. '
+            'Benchmarks are bench_e2e.py runs, each a fresh process, three repetitions per configuration, greedy '
+            'decoding, prompt “Do you like Dino Buddies? Reply in one short sentence.” (the reply ends after 15 '
+            'tokens). Token ids were identical across every configuration compared. Summaries are attached (Appendix A).'),
+          H2('The drive link comes first'),
+          P('The first benchmark attempt ran with the T7 at about 42 MB/s, a slow port or cable, and was stopped. On a '
+            '10 Gbps port, unbuffered expert-sized (19 MiB) reads reach 719 MB/s with one reader, 909 MB/s with four '
+            'and 843 MB/s with twelve. The default four reader threads are already at the drive’s ceiling.'),
+          H2('First measured v0.7 numbers'),
+          P('With v0.7 defaults, decode took 5.69 s/token and the first token 63.0 s. Each decode token requested '
+            '2.43 GB of experts: 1.11 GB read for the first time and 1.32 GB re-read after eviction. Two findings '
+            'stood out. Windows read 27% more from the drive than the engine asked for (read-ahead that went unused), '
+            'and the operating-system file cache gave nothing back: warm runs were as slow as cold ones (5.66 vs '
+            '5.69 s/token), because 32 GB of RAM cannot hold enough of the model.'),
+          H2('Unbuffered reads and a larger RAM tier'),
+          P('Version 0.8 reads the checkpoint with FILE_FLAG_NO_BUFFERING through a sector-aligned bounce buffer per '
+            'reader thread, so the file cache never holds a duplicate of expert bytes. With that duplicate gone, the '
+            'automatic host tier takes 85% of RAM above 6 GiB instead of 50%. Both changes are on by default on '
+            'Windows; --reader direct restores v0.7.'),
+          table([
+              ['Median, 3 cold + 3 warm runs', 'v0.7 buffered', 'v0.8 unbuffered'],
+              ['Decode', '5.69 s/token', '4.06 s/token (−29%)'],
+              ['Time to first token', '63.0 s', '58.1 s'],
+              ['Physical / logical bytes', '1.27', '1.00'],
+              ['Effective drive throughput', '580 MB/s', '863 MB/s'],
+              ['Host RAM tier', '8.2 GiB', '14.7 GiB'],
+              ['Re-read expert bytes per token', '1.29 GB', '0.97 GB'],
+          ], widths=(2.5 * inch, 2.1 * inch, 2.1 * inch)),
+          P('The reader and the RAM-tier size changed together, so the table measures the combination.', 'small'),
+          H2('Where the remaining four seconds go'),
+          P('tools/profile_decode.py brackets each section of a decode step with GPU synchronisation. Per token: about '
+            '2.78 s waiting for experts, 0.70 s in 280 expert calls, 0.54 s in attention, 0.37 s in hyper-connection '
+            'mixes and about 0.27 s of other MoE bookkeeping. Engram row reads, trace hashing and routing together '
+            'take under 0.1 s. Each layer therefore alternates roughly 65 ms of reads, with the GPU idle, and 55 ms '
+            'of GPU work, with the drive idle. Layer N+1’s experts are not known until layer N’s output '
+            'exists, so the two halves can only overlap if layer N+1’s experts are guessed.'),
+          H2('Measured and left off'),
+          table([
+              ['Configuration (3 runs each)', 'Decode', 'Notes'],
+              ['v0.8 default', '4.07 s/token', 'Unbuffered reads, blocking uploads'],
+              ['+ pinned staging and copy-stream uploads (FRUSTUM_ASYNC_UPLOAD=1)', '4.33 s/token',
+               'Throughput fell to 823 MB/s. Uploads were already hidden behind reads; the extra pinned allocations and copies cost more than they removed'],
+              ['+ gated next-layer prefetch (--predict-next 6)', '4.42 s/token',
+               'Read/compute overlap rose from 24% to 47%, but wrong guesses added about 0.37 GB of reads per token'],
+          ], widths=(2.3 * inch, 0.95 * inch, 3.45 * inch)),
+          P('In shadow mode, which scores guesses without reading, the next layer’s router applied to the current '
+            'layer’s input names 71.7% of the experts that are then routed (59.9% of those not already cached). '
+            'Reusing the previous token’s experts for the same layer is right only 8.5% of the time on uncached '
+            'experts. The gate correctly switched router guesses on; they are right often enough to keep the drive '
+            'busier, but not right enough to pay for the bytes they waste on a drive that is already the bottleneck. '
+            'This agrees with published offloading work, where misprediction cost dominates when storage is the '
+            'limit. [W4] [W5]'),
+          H2('What this points to'),
+          P('Follow-up turns feed new prompt tokens one at a time, because attention accepts only one token per step '
+            'when state exists; batching them would cut per-layer stalls (repeated experts were already cache hits, '
+            'so bytes fall less). The checkpoint ships three MTP draft layers (128 experts each, three active, plus '
+            'a confidence head) for DSpark speculative decoding, whose verification needs the same multi-token pass. '
+            'Once the drive stall is smaller, the ~1.6 s/token of small GPU calls becomes the target. On this GPU, '
+            'PyTorch runs NVFP4 matrix products at about 326 TFLOPS for 1,024 rows but is launch-bound (about 73 '
+            'µs per call) for 1 to 8 rows, and the checkpoint’s MXFP4 layout is not supported by the '
+            'standard wheel; this is unverified numerically and relevant to prefill and draft verification, not '
+            'single-token decode.'),
+          H1('18. Interpretation and limitations'),
           H2('Bandwidth first'),
           P('An all-miss pass through six routed FP4 experts in each of 40 layers requests about 4.5 GB. At 50 MB/s '
             'that is roughly 90 s of transfer; at 500 MB/s it is roughly 9 s. Expert reuse, the GPU and host tiers, '
-            'and resident dense weights bring actual traffic well below the all-miss figure, which is why the live '
-            'DeepSeek decode lands near 8 s per token. Further gains are most likely from reducing bytes per token '
-            '(better reuse, prediction, layout) rather than from faster arithmetic.'),
+            'and resident dense weights bring actual traffic well below the all-miss figure: the v0.8 measurements '
+            'show about 2.1 GB per decode token, of which 1.1 GB is first-time reads. With reads at the drive’s '
+            'ceiling, further gains come from fewer bytes per token, from overlapping reads with GPU work without '
+            'wasting reads, and from producing more than one token per pass over the weights.'),
           H2('Threats to measurement'),
-          P('Logical reads are requested bytes, not physical device I/O, and the OS cache may satisfy them. The live '
-            'v0.5.1 figures are single app runs without per-token breakdowns or controlled cache state. First-use GPU '
-            'initialization and validation contaminate older timings; the USB comparison was not repeated in reverse order.'),
+          P('Logical reads are requested bytes, not physical device I/O, and the OS cache may satisfy them; v0.8 runs '
+            'use unbuffered reads and report physical/logical 1.00. The live v0.5.1 figures are single app runs '
+            'without per-token breakdowns or controlled cache state. The v0.8 benchmarks use one short prompt and '
+            'fifteen decode tokens; longer conversations will reuse more experts and may behave differently. The '
+            'section profile synchronises the GPU and so slightly inflates its total.'),
           H2('Still unverified'),
           P('Full-model reference parity, same-day v0.4 comparison, long-context behaviour, other GPUs and drives, '
-            'v0.6 speed and prediction checks, v0.7 GPU and Windows-path checks, and long multi-turn quality.'),
+            'long multi-turn quality and speed, and the native FP4 path’s numerical accuracy on this GPU.'),
           H2('Position relative to earlier work'),
           P('On-demand flash-backed model execution is not a new general concept; LLM in a Flash studies memory-limited '
             'inference that reduces transfer volume through reuse and storage-aware access. [W3] Frustum_loader '
@@ -625,8 +703,8 @@ def story():
             'made by these tests.'),
           PageBreak()]
 
-    # ---------------------------------------------------------------- 18
-    s += [H1('18. Reproduction and integration'),
+    # ---------------------------------------------------------------- 19
+    s += [H1('19. Reproduction and integration'),
           H2('Environment'),
           P('Launchers look for Python in this order: FRUSTUM_PYTHON, .venv\\Scripts\\python.exe in the project folder, '
             'then the original Codex environment. A fresh machine:'),
@@ -652,6 +730,11 @@ def story():
                'bench_runs\\<timestamp>\\patch_warm_0.json\n'
                '# If the roofline says first-time storage reads dominate:\n'
                '.\\run_bench.ps1 --configs patch spill --spill-dir D:\\frustum_spill'),
+          H2('v0.8 measurements'),
+          code('.\\run_bench.ps1 --configs direct patch              # v0.7 buffered reader vs v0.8 default\n'
+               '.\\run_bench.ps1 --configs patch async_upload gated   # the opt-in experiments\n'
+               '.\\run_bench.ps1 --configs shadow --no-purge          # prediction precision, reads nothing\n'
+               'python tools\\profile_decode.py --prompt "Say hello." --max-new-tokens 24'),
           H2('Component tests'),
           code('.\\run_expert_test.ps1\n.\\run_moe_test.ps1\n.\\run_sparse_rows_test.ps1\n'
                '.\\run_block_primitives_test.ps1\n.\\run_layers0_3_test.ps1\n.\\run_repro_test.ps1\n'
@@ -663,7 +746,8 @@ def story():
               ['FRUSTUM_PYTHON', 'CUDA-enabled python.exe to use'],
               ['FRUSTUM_MODEL / FRUSTUM_MODELS', 'DeepSeek checkpoint folder / models root for ActivatePrime'],
               ['FRUSTUM_LOADER', 'Frustum_loader folder used by ActivatePrime\u2019s worker'],
-              ['FRUSTUM_READER', 'Set to mmap for the legacy reader'],
+              ['FRUSTUM_READER / --reader', 'unbuffered (v0.8 default on Windows), direct (v0.7 buffered reads), or mmap for the legacy reader'],
+              ['FRUSTUM_ASYNC_UPLOAD', '1 turns on v0.8 pinned staging and copy-stream uploads (off by default; measured slower)'],
               ['FRUSTUM_DEEPSEEK_HOST_GIB', 'Host-RAM expert tier size'],
               ['FRUSTUM_GLM_PLACEMENT', 'baseline, split (default) or tiered'],
               ['FRUSTUM_FUSED', '0 turns off the v0.6 fused decode kernels'],
@@ -678,12 +762,12 @@ def story():
           PageBreak()]
 
     # ---------------------------------------------------------------- 19
-    s += [H1('19. Contributors and references'),
+    s += [H1('20. Contributors and references'),
           table([
               ['Contributor', 'Role'],
               ['Aaron Grace', 'Project concept, architecture, original engine, hardware testing and direction'],
               ['OpenAI (ChatGPT, Codex)', 'Implementation and analysis for v0.1 to v0.4; earlier whitepaper editions'],
-              ['Claude (Anthropic)', 'v0.5-v0.7 engineering: RangeReader, tiered expert cache, eviction policy, placement, prefix reuse, streaming, fused decode kernels, next-layer prediction, I/O ledger, roofline and spill tier'],
+              ['Claude (Anthropic)', 'v0.5-v0.8 engineering: RangeReader and unbuffered reads, tiered expert cache, eviction policy, placement, prefix reuse, streaming, fused decode kernels, next-layer prediction, I/O ledger, roofline, spill tier and the v0.8 measurements'],
               [f'Dino Buddy {DINO}', 'Contributor and test prompt'],
               ['DinoClaw', 'Aaron Grace\u2019s original agent runtime; assistance'],
           ], widths=(1.9 * inch, 4.8 * inch)),
@@ -698,6 +782,10 @@ def story():
             'docs.pytorch.org/docs/stable/notes/cuda.html'),
           P('[W3] Alizadeh et al., LLM in a flash: Efficient Large Language Model Inference with Limited Memory, '
             'ACL 2024; arXiv:2312.11514.'),
+          P('[W4] Hwang et al., Pre-gated MoE: An Algorithm-System Co-Design for Fast and Scalable Mixture-of-Expert '
+            'Inference, ISCA 2024.'),
+          P('[W5] Tang et al., HOBBIT: A Mixed Precision Expert Offloading System for Fast MoE Inference, '
+            'arXiv:2411.01433.'),
           H2('Version history'),
           P('0.1 four MoE sublayers. 0.2 Layer 0 block. 0.3 repeatability audit and Layers 0\u20133. 0.3.8 first '
             '40-layer reply, resident head, expert cache benchmark, Phi-4 and GLM backends. 0.4.0 GLM placement and '
@@ -705,7 +793,9 @@ def story():
             'rename from Frusium_loader to Frustum_loader. 0.6.0 fused decode kernels for every backend and next-layer '
             'expert prediction for DeepSeek. 0.7.0 I/O ledger and physical-device counters, cold/warm roofline '
             'benchmarking, routing-trace replay, verified opt-in spill storage, layer-safe cache admission, coalesced '
-            'reads, RAM guard and measured prediction gating; target-GPU benchmarks remain pending.'),
+            'reads, RAM guard and measured prediction gating. 0.8.0 first end-to-end measurements on the target machine, '
+            'unbuffered Windows reads and a larger host RAM tier (5.69 to 4.06 s/token), a per-section decode profiler, '
+            'and opt-in asynchronous uploads and gated prefetch, both measured slower and left off.'),
           PageBreak()]
 
     # ---------------------------------------------------------------- appendix
@@ -739,6 +829,14 @@ EVIDENCE = [
     ('v07_logs/roofline_arithmetic.json', 'v0.7 roofline arithmetic and replay inputs'),
     ('v07_logs/selftest_v07_sandbox.log', 'v0.7 no-GPU self-test result'),
     ('v07_logs/replay_saved_v04_profile_sandbox.log', 'Replay of saved v0.4 routing'),
+    ('CHANGES_v0.8.md', 'v0.8 changes and measured results'),
+    ('v08_logs/v08_patch_vs_unbuffered_2_results.md', 'v0.7 buffered vs v0.8 unbuffered reader, 12 runs'),
+    ('v08_logs/v08_patch_vs_unbuffered_2_results.json', 'The same benchmark, all per-run metrics'),
+    ('v08_logs/v08_pipeline_and_gated_results.md', 'Async uploads and gated prefetch vs the v0.8 default, 9 runs'),
+    ('v08_logs/v08_pipeline_and_gated_results.json', 'The same benchmark, all per-run metrics'),
+    ('v08_logs/v08_shadow_prediction_results.md', 'Shadow-mode prediction runs'),
+    ('v08_logs/v08_shadow_prediction_results.json', 'The same runs, all per-run metrics'),
+    ('v08_logs/decode_section_profile.txt', 'Per-section decode time profile'),
 ]
 
 

@@ -36,6 +36,21 @@ v0.7 (none of it changes which expert runs or any arithmetic):
 - Optional RAM guard: shrink the host tier when free RAM falls below a floor.
 - Optional spill tier (spill_tier.SpillTier, set cache.spill): verified exact copies of
   experts on a faster local drive, consulted before the checkpoint drive.
+
+v0.8 pipelined uploads (opt-in: FRUSTUM_ASYNC_UPLOAD=1, CUDA only). OFF by default because
+it measured slower on the target machine: 4.33 vs 4.07 s/token median, token ids identical
+(bench_runs/v08_pipeline_and_gated). Uploads were already hidden behind drive reads, and the
+extra pinned allocations and copies cost more than they removed. Kept for A/B runs and for
+machines where reads are not the bottleneck.
+- When a reader thread finishes an expert it hands it to one of two staging threads, which
+  copy it into page-locked (pinned) memory; prefetch() stages host-tier hits the same way.
+  Staging threads only allocate pinned host memory (thread-safe); they launch no GPU work.
+- get() allocates the GPU copy on a dedicated copy stream, starts a non-blocking copy from
+  the pinned bytes, and makes the current stream wait on an event. The calling thread no
+  longer blocks on uploads, so it can queue the next expert while the GPU copies and computes.
+- Optional inspect(key, cpu_tensors) runs in the staging thread and returns attributes to set
+  on the Entry; streamed_moe uses it to do the NaN-scale check on the CPU instead of forcing
+  a GPU synchronisation on first use. Bytes, kernels and summation order are unchanged.
 """
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -63,11 +78,18 @@ class Entry:
     size: int
 
 
+@dataclass
+class _Staged:
+    """Pinned copies of an expert's packed tensors, ready for a non-blocking upload."""
+    pinned: list
+    attrs: dict
+
+
 class TieredExpertCache:
     def __init__(self, torch, catalog, device, gpu_bytes, host_bytes=0, *, io_threads=4,
                  gpu_policy='lfu', host_policy='lru', pinned=None, half_life=8,
                  cap_bytes=None, headroom_bytes=0, coalesce=None, protect_layer=None,
-                 ram_probe=None, ram_floor_bytes=0):
+                 ram_probe=None, ram_floor_bytes=0, async_upload=None):
         if gpu_bytes <= 0 or host_bytes < 0 or io_threads < 0:
             raise ValueError('Invalid cache configuration')
         self.t = torch
@@ -97,6 +119,15 @@ class TieredExpertCache:
         self.requests = self.hits = self.host_hits = self.disk_reads = self.evictions = 0
         self.upload_seconds = self.wait_seconds = 0.0
         self.upload_bytes = 0
+        # v0.8 pipelined uploads
+        wanted = _flag('FRUSTUM_ASYNC_UPLOAD', False) if async_upload is None else bool(async_upload)
+        self.async_upload = wanted and self.cuda
+        self.copy_stream = torch.cuda.Stream(self.device) if self.async_upload else None
+        self.stage_pool = (ThreadPoolExecutor(2, thread_name_prefix='frustum-stage')
+                           if self.async_upload and io_threads else None)
+        self.staged = {}     # key -> Future[_Staged] for host-tier keys about to be uploaded
+        self.inspect = None  # optional callable(key, cpu_tensors) -> dict of Entry attributes
+        self.staged_uploads = self.blocking_stages = 0
 
     # Attribute names kept from the v0 cache so existing reports keep working.
     @property
@@ -140,9 +171,45 @@ class TieredExpertCache:
         finally:
             self.ledger.read_end(size)
 
+    def _stage(self, key, tensors):
+        """Copy CPU tensors into pinned memory (no CUDA calls) and run inspect. Thread-safe."""
+        pinned = []
+        for tensor in tensors:
+            copy = self.t.empty(tensor.shape, dtype=tensor.dtype, pin_memory=True)
+            copy.copy_(tensor)
+            pinned.append(copy)
+        attrs = self.inspect(key, tensors) if self.inspect is not None else {}
+        return _Staged(pinned, attrs)
+
+    def _read_staged(self, key, queued=False):
+        """_read, then (v0.8) hand pinned staging to a staging thread. The reader thread is free
+        for its next read at once: staging in the reader thread left the drive idle during each
+        copy (measured 866 -> 800 MB/s)."""
+        buffers = self._read(key, queued)
+        if self.async_upload:
+            buffers.tensors = [self.t.frombuffer(buffer, dtype=self.t.uint8) for buffer in buffers]
+            if self.stage_pool is not None:
+                buffers.staged = self.stage_pool.submit(self._stage, key, buffers.tensors)
+        return buffers
+
+    def _upload_async(self, pinned):
+        """Non-blocking upload on the copy stream; the current stream waits for it on the GPU."""
+        t = self.t
+        main = t.cuda.current_stream(self.device)
+        with t.cuda.stream(self.copy_stream):
+            out = [t.empty(p.shape, dtype=p.dtype, device=self.device) for p in pinned]
+            for target, source in zip(out, pinned):
+                target.copy_(source, non_blocking=True)
+            done = t.cuda.Event()
+            done.record(self.copy_stream)
+        main.wait_event(done)
+        for target in out:
+            target.record_stream(main)  # freed blocks are not reused before main-stream work ends
+        return out
+
     def _submit(self, key):
         self.ledger.submitted()
-        return self.pool.submit(self._read, key, True)
+        return self.pool.submit(self._read_staged, key, True)
 
     def new_pass(self):
         """Call once per pass over the layers (one prefill or one decode step)."""
@@ -191,6 +258,9 @@ class TieredExpertCache:
                 if speculative:
                     self.speculative.add(key)
                     self.ledger.speculative('issued')
+            elif (not speculative and self.stage_pool is not None and key not in self.cache
+                  and key in self.ram and key not in self.staged):
+                self.staged[key] = self.stage_pool.submit(self._stage, key, self.ram[key])
 
     def _adopt(self, key):
         self.speculative.discard(key)
@@ -200,6 +270,8 @@ class TieredExpertCache:
         """Forget background reads nobody collected, e.g. after an interrupted forward pass.
         Reads for keys in keep stay queued (next-layer prediction issued them early)."""
         keep = set(keep)
+        for key in [key for key in self.staged if key not in keep]:
+            self.staged.pop(key).cancel()
         for key in [key for key in self.pending if key not in keep]:
             future = self.pending.pop(key)
             guess = key in self.speculative
@@ -250,11 +322,15 @@ class TieredExpertCache:
         size = self.size(key)
         if size > self.gpu.budget:
             raise RuntimeError('One expert exceeds cache budget')
+        staged = None
         tensors = self.ram.get(key)
         if tensors is not None:
             self.host_hits += 1
             self.host.touch(key)
             self.ledger.served(key, size, 'host')
+            future = self.staged.pop(key, None)
+            if future is not None:
+                staged = future.result()
         else:
             began = time.perf_counter()
             future = self.pending.pop(key, None)
@@ -262,7 +338,7 @@ class TieredExpertCache:
                 self._adopt(key)
             self.ledger.wait_begin()
             try:
-                buffers = self._read(key) if future is None else future.result()
+                buffers = self._read_staged(key) if future is None else future.result()
             finally:
                 self.ledger.wait_end()
             self.wait_seconds += time.perf_counter() - began
@@ -272,8 +348,14 @@ class TieredExpertCache:
             else:
                 self.disk_reads += 1
                 self.ledger.served(key, size, 'disk')
-            tensors = [self.t.frombuffer(buffer, dtype=self.t.uint8) for buffer in buffers]
+            tensors = getattr(buffers, 'tensors', None)
+            if tensors is None:
+                tensors = [self.t.frombuffer(buffer, dtype=self.t.uint8) for buffer in buffers]
+            staged = getattr(buffers, 'staged', None)
+            if staged is not None:
+                staged = staged.result()
             self._remember(key, tensors, size)
+        self.staged.pop(key, None)
         keep = set(protected)
         keep.add(key)
         wide = keep | self.layer_keys
@@ -296,7 +378,17 @@ class TieredExpertCache:
             self.gpu.remove(victim)
             self._evict(victim)
         began = time.perf_counter()
-        entry = Entry([tensor.to(self.device) for tensor in tensors], size)
+        if self.async_upload:
+            if staged is None:  # not staged in the background (no pool, or not prefetched)
+                staged = self._stage(key, tensors)
+                self.blocking_stages += 1
+            entry = Entry(self._upload_async(staged.pinned), size)
+            for name, value in staged.attrs.items():
+                setattr(entry, name, value)
+            self.staged_uploads += 1
+        else:
+            entry = Entry([tensor.to(self.device) for tensor in tensors], size)
+        # With async_upload this is the time to queue the copy, not the copy itself.
         self.upload_seconds += time.perf_counter() - began
         self.upload_bytes += size
         self.cache[key] = entry
@@ -314,11 +406,16 @@ class TieredExpertCache:
                     host_bytes=self.host.used, host_budget_bytes=self.host.budget, host_policy=self.host.policy,
                     host_shrinks=self.host_shrinks, coalesced_reads=self.coalesce,
                     layer_protection=self.protect_layer, io=self.ledger.snapshot(),
-                    spill_hits=self.spill_hits, spill=self.spill.stats() if self.spill is not None else None)
+                    spill_hits=self.spill_hits, spill=self.spill.stats() if self.spill is not None else None,
+                    async_upload=self.async_upload, staged_uploads=self.staged_uploads,
+                    blocking_stages=self.blocking_stages)
 
     def close(self):
         if self.pool is not None:
             self.pool.shutdown(wait=True, cancel_futures=True)
+        if self.stage_pool is not None:
+            self.stage_pool.shutdown(wait=True, cancel_futures=True)
+        self.staged.clear()
         if self.cuda:
             self.t.cuda.synchronize(self.device)
         self.pending.clear()

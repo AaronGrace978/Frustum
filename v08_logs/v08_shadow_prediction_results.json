@@ -1,0 +1,271 @@
+{
+  "prompt": "Do you like Dino Buddies? Reply in one short sentence.",
+  "tokens": 24,
+  "runs_per_cell": 3,
+  "configs": [
+    "shadow"
+  ],
+  "note": "physical_bytes is device-wide for the model drive; other programs reading it are included",
+  "report": {
+    "shadow": {
+      "warm": {
+        "ttft_seconds": {
+          "median": 58.01590870000018,
+          "p95": 58.03534023999964,
+          "min": 57.735831399999824,
+          "max": 58.03749929999958,
+          "n": 3
+        },
+        "seconds_per_token": {
+          "median": 4.12926229333331,
+          "p95": 4.190953777333377,
+          "min": 4.07955388666669,
+          "max": 4.1978083866667175,
+          "n": 3
+        },
+        "process_seconds": {
+          "median": 126.35785650000025,
+          "p95": 127.79131565999978,
+          "min": 125.23136290000002,
+          "max": 127.95058889999973,
+          "n": 3
+        },
+        "physical_bytes": {
+          "median": 79078075392,
+          "p95": 79250729779.2,
+          "min": 79040457728,
+          "max": 79269913600,
+          "n": 3
+        },
+        "logical_bytes": {
+          "median": 79007138880,
+          "p95": 79176344640.0,
+          "min": 78969537600,
+          "max": 79195145280,
+          "n": 3
+        },
+        "physical_over_logical": {
+          "median": 1.0008980694348146,
+          "p95": 1.0009394990270313,
+          "min": 1.0008978493969733,
+          "max": 1.0009441023150554,
+          "n": 3
+        },
+        "unique_expert_bytes_per_token": {
+          "median": 1112997888.0,
+          "p95": 1112997888.0,
+          "min": 1112997888.0,
+          "max": 1112997888.0,
+          "n": 3
+        },
+        "repeat_expert_bytes_per_token": {
+          "median": 973873152.0,
+          "p95": 985153536.0,
+          "min": 971366400.0,
+          "max": 986406912.0,
+          "n": 3
+        },
+        "reread_amplification": {
+          "median": 1.875,
+          "p95": 1.885135135135135,
+          "min": 1.8727477477477477,
+          "max": 1.8862612612612613,
+          "n": 3
+        },
+        "gpu_hit_rate": {
+          "median": 0.31023809523809526,
+          "p95": 0.31023809523809526,
+          "min": 0.31023809523809526,
+          "max": 0.31023809523809526,
+          "n": 3
+        },
+        "host_hit_rate": {
+          "median": 0.29333333333333333,
+          "p95": 0.2937619047619047,
+          "min": 0.29095238095238096,
+          "max": 0.2938095238095238,
+          "n": 3
+        },
+        "spill_hit_rate": {
+          "median": 0.0,
+          "p95": 0.0,
+          "min": 0.0,
+          "max": 0.0,
+          "n": 3
+        },
+        "drive_hit_rate": {
+          "median": 0.3964285714285714,
+          "p95": 0.3985714285714286,
+          "min": 0.39595238095238094,
+          "max": 0.39880952380952384,
+          "n": 3
+        },
+        "effective_MBps": {
+          "median": 861.5030905721698,
+          "p95": 865.4180211392871,
+          "min": 855.1550878495374,
+          "max": 865.8530134245224,
+          "n": 3
+        },
+        "mean_queue_depth": {
+          "median": 2.8551923397736325,
+          "p95": 2.860828912585281,
+          "min": 2.8493905340106376,
+          "max": 2.8614551984532417,
+          "n": 3
+        },
+        "drive_utilization": {
+          "median": 0.5866327464620091,
+          "p95": 0.5897424671728555,
+          "min": 0.5848287186708345,
+          "max": 0.5900879916962829,
+          "n": 3
+        },
+        "overlap_fraction": {
+          "median": 0.2350739198541815,
+          "p95": 0.2366381628383739,
+          "min": 0.22711062031417042,
+          "max": 0.2368119676143953,
+          "n": 3
+        },
+        "runs": 3,
+        "flags": []
+      }
+    },
+    "_token_ids": {
+      "identical_within_each_config": true,
+      "identical_across_configs": true
+    }
+  },
+  "runs": [
+    {
+      "config": "shadow",
+      "state": "warm",
+      "repetition": 0,
+      "metrics": {
+        "ttft_seconds": 58.03749929999958,
+        "seconds_per_token": 4.1978083866667175,
+        "process_seconds": 127.95058889999973,
+        "physical_bytes": 79269913600,
+        "logical_bytes": 79195145280,
+        "physical_over_logical": 1.0009441023150554,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 986406912.0,
+        "reread_amplification": 1.8862612612612613,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.29095238095238096,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.39880952380952384,
+        "effective_MBps": 855.1550878495374,
+        "mean_queue_depth": 2.8493905340106376,
+        "drive_utilization": 0.5848287186708345,
+        "overlap_fraction": 0.2368119676143953
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "shadow_warm_0.json"
+    },
+    {
+      "config": "shadow",
+      "state": "warm",
+      "repetition": 1,
+      "metrics": {
+        "ttft_seconds": 58.01590870000018,
+        "seconds_per_token": 4.12926229333331,
+        "process_seconds": 126.35785650000025,
+        "physical_bytes": 79078075392,
+        "logical_bytes": 79007138880,
+        "physical_over_logical": 1.0008978493969733,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 973873152.0,
+        "reread_amplification": 1.875,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.29333333333333333,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.3964285714285714,
+        "effective_MBps": 861.5030905721698,
+        "mean_queue_depth": 2.8551923397736325,
+        "drive_utilization": 0.5866327464620091,
+        "overlap_fraction": 0.2350739198541815
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "shadow_warm_1.json"
+    },
+    {
+      "config": "shadow",
+      "state": "warm",
+      "repetition": 2,
+      "metrics": {
+        "ttft_seconds": 57.735831399999824,
+        "seconds_per_token": 4.07955388666669,
+        "process_seconds": 125.23136290000002,
+        "physical_bytes": 79040457728,
+        "logical_bytes": 78969537600,
+        "physical_over_logical": 1.0008980694348146,
+        "unique_expert_bytes_per_token": 1112997888.0,
+        "repeat_expert_bytes_per_token": 971366400.0,
+        "reread_amplification": 1.8727477477477477,
+        "gpu_hit_rate": 0.31023809523809526,
+        "host_hit_rate": 0.2938095238095238,
+        "spill_hit_rate": 0.0,
+        "drive_hit_rate": 0.39595238095238094,
+        "effective_MBps": 865.8530134245224,
+        "mean_queue_depth": 2.8614551984532417,
+        "drive_utilization": 0.5900879916962829,
+        "overlap_fraction": 0.22711062031417042
+      },
+      "token_ids": [
+        43,
+        2118,
+        420,
+        3873,
+        18741,
+        517,
+        344,
+        260,
+        33125,
+        305,
+        1404,
+        4923,
+        362,
+        7286,
+        16
+      ],
+      "flags": [],
+      "evidence": "shadow_warm_2.json"
+    }
+  ]
+}
