@@ -1,4 +1,4 @@
-"""Build Frustum_loader_Whitepaper_v0.8.0.pdf from this script and whitepaper/assets.
+"""Build Frustum_loader_Whitepaper_v0.9.0.pdf from this script and whitepaper/assets.
 
 Run from the repo root:  python whitepaper/build_whitepaper.py
 Needs reportlab and pypdf. Evidence JSONs in the repo root are embedded as attachments.
@@ -18,8 +18,8 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph, Prefo
 ROOT = Path(__file__).resolve().parent.parent
 WP = ROOT / 'whitepaper'
 A = WP / 'assets'
-OUT = WP / 'Frustum_loader_Whitepaper_v0.8.0.pdf'
-VERSION = 'Version 0.8.0 | November 16, 2026'
+OUT = WP / 'Frustum_loader_Whitepaper_v0.9.0.pdf'
+VERSION = 'Version 0.9.0 | November 16, 2026'
 
 FONT_DIRS = [Path('/usr/share/fonts/truetype/dejavu'), Path('C:/Windows/Fonts')]
 
@@ -113,7 +113,7 @@ def on_page(canvas, doc):
     canvas.setStrokeColor(TEAL)
     canvas.setLineWidth(1.6)
     canvas.line(0.75 * inch, h - 0.66 * inch, w - 0.75 * inch, h - 0.66 * inch)
-    canvas.drawString(0.75 * inch, 0.5 * inch, f'{VERSION} | Measured v0.8 benchmarks; live v0.5.1 runs')
+    canvas.drawString(0.75 * inch, 0.5 * inch, f'{VERSION} | Measured v0.8-v0.9 benchmarks; live v0.5.1 runs')
     canvas.drawRightString(w - 0.75 * inch, 0.5 * inch, str(doc.page))
     canvas.restoreState()
 
@@ -126,7 +126,7 @@ def story():
           P(f'Technical whitepaper | {VERSION}'),
           P('Project concept, architecture and direction: <b>Aaron Grace</b>. '
             'Engineering contributors: <b>OpenAI</b> (ChatGPT and Codex, v0.1 to v0.4 implementation and analysis) and '
-            '<b>Claude / Anthropic</b> (v0.5-v0.8 I/O, placement, cache and measurement engineering). '
+            '<b>Claude / Anthropic</b> (v0.5-v0.9 I/O, placement, cache, attention and measurement engineering). '
             f'Contributor: Dino Buddy {DINO}. The project also received assistance from DinoClaw, '
             'Aaron Grace\u2019s original agent runtime.'),
           P('The project was previously published as <i>Frusium_loader</i>. The name is now Frustum_loader: '
@@ -143,11 +143,15 @@ def story():
             'behaviour and an opt-in verified spill tier (Section 16). Version 0.8 is the first release measured end to '
             'end on the target machine: unbuffered reads and a larger RAM tier take DeepSeek decode from 5.69 to '
             '4.06 s/token, with identical token ids (Section 17). Two further ideas, asynchronous uploads and gated '
-            'next-layer prefetch, measured slower and stay off by default.'),
+            'next-layer prefetch, measured slower and stay off by default. Version 0.9 lets attention extend the '
+            'conversation state by many tokens in one pass, so follow-up turns start replying 38% to 51% sooner, with '
+            'the same reply tokens (Section 18).'),
           table([
-              ['DeepSeek V4.1 Flash, bench_e2e.py', 'Median of 3 cold + 3 warm fresh-process runs, T7 on a 10 Gbps port'],
-              ['v0.7 defaults (buffered reads)', '5.69 s/token decode, 63.0 s to first token'],
+              ['DeepSeek V4.1 Flash, measured', 'RTX 5060 Ti 16 GB, checkpoint on a T7 at a 10 Gbps USB port'],
+              ['v0.7 defaults (buffered reads)', '5.69 s/token decode, 63.0 s to first token (bench_e2e.py median)'],
               ['v0.8 defaults (unbuffered reads)', '4.06 s/token decode, 58.1 s to first token (29% faster decode)'],
+              ['v0.9 follow-up turn, 8 new tokens', '22.1 s to first reply token, was 35.8 s'],
+              ['v0.9 follow-up turn, 29 new tokens', '60.1 s to first reply token, was 123.7 s'],
           ]),
           table([
               ['Checkpoint', 'Live result in ActivatePrime (v0.5.1, T7 on USB-C)'],
@@ -178,9 +182,10 @@ def story():
               ['15', 'v0.6: fused decode kernels and next-layer prediction'],
               ['16', 'v0.7: I/O measurement, roofline and guarded data movement'],
               ['17', 'v0.8: measured baseline, unbuffered reads and the per-layer stall'],
-              ['18', 'Interpretation and limitations'],
-              ['19', 'Reproduction and integration'],
-              ['20', 'Contributors and references'],
+              ['18', 'v0.9: batched follow-up prompts'],
+              ['19', 'Interpretation and limitations'],
+              ['20', 'Reproduction and integration'],
+              ['21', 'Contributors and references'],
               ['A', 'Run evidence (embedded attachments)'],
           ], widths=(0.8 * inch, 5.9 * inch)),
           picture(A / 'deepseek_progress.png', 5.0 * inch,
@@ -669,16 +674,55 @@ def story():
             'This agrees with published offloading work, where misprediction cost dominates when storage is the '
             'limit. [W4] [W5]'),
           H2('What this points to'),
-          P('Follow-up turns feed new prompt tokens one at a time, because attention accepts only one token per step '
-            'when state exists; batching them would cut per-layer stalls (repeated experts were already cache hits, '
-            'so bytes fall less). The checkpoint ships three MTP draft layers (128 experts each, three active, plus '
+          P('Follow-up turns fed new prompt tokens one at a time, because attention accepted only one token per step '
+            'when state existed; batching them cuts per-layer stalls (done in v0.9, Section 18). The checkpoint ships three MTP draft layers (128 experts each, three active, plus '
             'a confidence head) for DSpark speculative decoding, whose verification needs the same multi-token pass. '
             'Once the drive stall is smaller, the ~1.6 s/token of small GPU calls becomes the target. On this GPU, '
             'PyTorch runs NVFP4 matrix products at about 326 TFLOPS for 1,024 rows but is launch-bound (about 73 '
             'µs per call) for 1 to 8 rows, and the checkpoint’s MXFP4 layout is not supported by the '
             'standard wheel; this is unverified numerically and relevant to prefill and draft verification, not '
             'single-token decode.'),
-          H1('18. Interpretation and limitations'),
+          PageBreak()]
+
+    # ---------------------------------------------------------------- 18 (v0.9)
+    s += [H1('18. v0.9: batched follow-up prompts'),
+          P('A follow-up turn reuses the attention state of the conversation so far. Until v0.9 its new prompt '
+            'tokens still went through all 40 layers one token per pass, because attention accepted only one new '
+            'token when state existed, so every token paid the per-layer read stall of Section 17. An 8-token '
+            'follow-up spent about 36 s before its first reply token.'),
+          H2('Extending attention state by many tokens'),
+          P('The sliding-window ring holds only 128 positions, so appending first would overwrite rows that earlier '
+            'new tokens still need. The 127 most recent rows are taken before appending, the new rows follow them, '
+            'and each new token gets the 128 positions ending at itself, in the ascending order a decode step sees. '
+            'In the compressor, each new token goes through the decode step’s slot logic in order, so every '
+            'pooled group is computed exactly as one-at-a-time decode computes it. In the indexer, each token sees '
+            'the compressed groups completed up to its own position. Appends use the per-token reference attention '
+            'loop that decode uses. Engram hashing and the MoE already handled several tokens.'),
+          H2('Results on the full model'),
+          P('A three-turn greedy conversation, 40 layers, run with one token per pass (the v0.8 path) and with '
+            '8 and 32 tokens per pass. Time to first token is the time to process the new prompt tokens and produce '
+            'the first reply token.'),
+          table([
+              ['Tokens per pass', 'Turn 2 (8 new tokens)', 'Turn 3 (29 new tokens)', 'Reply tokens vs v0.8'],
+              ['1 (v0.8)', '35.8 s, 8 passes', '123.7 s, 29 passes, 93 GB read', ''],
+              ['8', '22.5 s, 1 pass', '87.7 s, 4 passes, 102 GB', 'Turn 3 diverges after ~10 tokens, same meaning'],
+              ['32 (v0.9 default)', '22.1 s, 1 pass', '60.1 s, 1 pass, 83 GB', 'Identical on all three turns'],
+          ], widths=(1.25 * inch, 1.45 * inch, 1.9 * inch, 2.1 * inch)),
+          P('The first turn (58 s) and decode speed are unchanged. One pass over 29 tokens also reads fewer bytes '
+            'than four passes of eight, because each expert the prompt needs is read once.'),
+          H2('Correctness'),
+          P('Unit tests check, without model weights, that the window rows each appended token sees equal the rows '
+            'a decode step gives it, including past the 128-position wrap, and that the compressor’s pooled '
+            'groups and carried state equal decode’s bit for bit. On the real model, long_context_check.py '
+            'appends 16 positions of a 160-token sequence 8 at a time and compares them with one-at-a-time decode. '
+            'With layer 0 alone, the batched path differs from decode by 0.04% (13 of 16 positions bit-identical), '
+            'while a full prefill differs from decode by 0.72%. With more layers the differences grow at the same '
+            'rate as the prefill/decode gap: they start as last-bit rounding in matrix products whose result depends '
+            'on the number of rows and then spread to later tokens through attention.'),
+          P('The same check found an existing issue: at four layers its own tolerance fails on unchanged v0.8 code, '
+            'because prefill and one-at-a-time decode already differ by about 4.6% there. Batched append is no '
+            'further from decode than prefill is. The cause of the drift was not investigated in this release.'),
+          H1('19. Interpretation and limitations'),
           H2('Bandwidth first'),
           P('An all-miss pass through six routed FP4 experts in each of 40 layers requests about 4.5 GB. At 50 MB/s '
             'that is roughly 90 s of transfer; at 500 MB/s it is roughly 9 s. Expert reuse, the GPU and host tiers, '
@@ -694,7 +738,9 @@ def story():
             'section profile synchronises the GPU and so slightly inflates its total.'),
           H2('Still unverified'),
           P('Full-model reference parity, same-day v0.4 comparison, long-context behaviour, other GPUs and drives, '
-            'long multi-turn quality and speed, and the native FP4 path’s numerical accuracy on this GPU.'),
+            'long multi-turn quality and speed, the native FP4 path’s numerical accuracy on this GPU, the cause '
+            'of the few-percent prefill/decode drift at 160 tokens (Section 18), and follow-up prompts longer than '
+            'the 29 tokens measured.'),
           H2('Position relative to earlier work'),
           P('On-demand flash-backed model execution is not a new general concept; LLM in a Flash studies memory-limited '
             'inference that reduces transfer volume through reuse and storage-aware access. [W3] Frustum_loader '
@@ -704,7 +750,7 @@ def story():
           PageBreak()]
 
     # ---------------------------------------------------------------- 19
-    s += [H1('19. Reproduction and integration'),
+    s += [H1('20. Reproduction and integration'),
           H2('Environment'),
           P('Launchers look for Python in this order: FRUSTUM_PYTHON, .venv\\Scripts\\python.exe in the project folder, '
             'then the original Codex environment. A fresh machine:'),
@@ -735,6 +781,12 @@ def story():
                '.\\run_bench.ps1 --configs patch async_upload gated   # the opt-in experiments\n'
                '.\\run_bench.ps1 --configs shadow --no-purge          # prediction precision, reads nothing\n'
                'python tools\\profile_decode.py --prompt "Say hello." --max-new-tokens 24'),
+          H2('v0.9 follow-up turns'),
+          code('python frustum_chat.py --prompt "Do you like Dino Buddies?" --followup "Say one word." '
+               '--append-chunk 1   # v0.8\n'
+               'python frustum_chat.py --prompt "Do you like Dino Buddies?" --followup "Say one word."'
+               '                    # v0.9\n'
+               'python long_context_check.py --tokens 160 --tail 24 --layers 4 --append-chunk 8'),
           H2('Component tests'),
           code('.\\run_expert_test.ps1\n.\\run_moe_test.ps1\n.\\run_sparse_rows_test.ps1\n'
                '.\\run_block_primitives_test.ps1\n.\\run_layers0_3_test.ps1\n.\\run_repro_test.ps1\n'
@@ -748,6 +800,7 @@ def story():
               ['FRUSTUM_LOADER', 'Frustum_loader folder used by ActivatePrime\u2019s worker'],
               ['FRUSTUM_READER / --reader', 'unbuffered (v0.8 default on Windows), direct (v0.7 buffered reads), or mmap for the legacy reader'],
               ['FRUSTUM_ASYNC_UPLOAD', '1 turns on v0.8 pinned staging and copy-stream uploads (off by default; measured slower)'],
+              ['FRUSTUM_APPEND_CHUNK / --append-chunk', 'New prompt tokens per pass on a follow-up turn (v0.9; default 32, 1 restores v0.8)'],
               ['FRUSTUM_DEEPSEEK_HOST_GIB', 'Host-RAM expert tier size'],
               ['FRUSTUM_GLM_PLACEMENT', 'baseline, split (default) or tiered'],
               ['FRUSTUM_FUSED', '0 turns off the v0.6 fused decode kernels'],
@@ -762,12 +815,12 @@ def story():
           PageBreak()]
 
     # ---------------------------------------------------------------- 19
-    s += [H1('20. Contributors and references'),
+    s += [H1('21. Contributors and references'),
           table([
               ['Contributor', 'Role'],
               ['Aaron Grace', 'Project concept, architecture, original engine, hardware testing and direction'],
               ['OpenAI (ChatGPT, Codex)', 'Implementation and analysis for v0.1 to v0.4; earlier whitepaper editions'],
-              ['Claude (Anthropic)', 'v0.5-v0.8 engineering: RangeReader and unbuffered reads, tiered expert cache, eviction policy, placement, prefix reuse, streaming, fused decode kernels, next-layer prediction, I/O ledger, roofline, spill tier and the v0.8 measurements'],
+              ['Claude (Anthropic)', 'v0.5-v0.9 engineering: batched follow-up prompts, RangeReader and unbuffered reads, tiered expert cache, eviction policy, placement, prefix reuse, streaming, fused decode kernels, next-layer prediction, I/O ledger, roofline, spill tier and the v0.8 measurements'],
               [f'Dino Buddy {DINO}', 'Contributor and test prompt'],
               ['DinoClaw', 'Aaron Grace\u2019s original agent runtime; assistance'],
           ], widths=(1.9 * inch, 4.8 * inch)),
@@ -795,7 +848,9 @@ def story():
             'benchmarking, routing-trace replay, verified opt-in spill storage, layer-safe cache admission, coalesced '
             'reads, RAM guard and measured prediction gating. 0.8.0 first end-to-end measurements on the target machine, '
             'unbuffered Windows reads and a larger host RAM tier (5.69 to 4.06 s/token), a per-section decode profiler, '
-            'and opt-in asynchronous uploads and gated prefetch, both measured slower and left off.'),
+            'and opt-in asynchronous uploads and gated prefetch, both measured slower and left off. 0.9.0 attention '
+            'extends existing state by many tokens per pass, so follow-up prompts are processed in one pass '
+            '(follow-up time to first token 38% to 51% lower, same reply tokens), and scripted multi-turn runs.'),
           PageBreak()]
 
     # ---------------------------------------------------------------- appendix
@@ -837,6 +892,16 @@ EVIDENCE = [
     ('v08_logs/v08_shadow_prediction_results.md', 'Shadow-mode prediction runs'),
     ('v08_logs/v08_shadow_prediction_results.json', 'The same runs, all per-run metrics'),
     ('v08_logs/decode_section_profile.txt', 'Per-section decode time profile'),
+    ('CHANGES_v0.9.md', 'v0.9 batched follow-up prompts: design, results and checks'),
+    ('v09_logs/followup_turns.json', 'Three-turn conversation with 1, 8 and 32 tokens per pass'),
+    ('v09_logs/chat_chunk1.log', 'Console log, one token per pass (v0.8 path)'),
+    ('v09_logs/chat_chunk8.log', 'Console log, 8 tokens per pass'),
+    ('v09_logs/chat_chunk32.log', 'Console log, 32 tokens per pass (v0.9 default)'),
+    ('v09_logs/long_context_1layers_v09.json', 'Batched append vs decode, layer 0'),
+    ('v09_logs/long_context_2layers_v09.json', 'Batched append vs decode, layers 0-1'),
+    ('v09_logs/long_context_3layers_v09.json', 'Batched append vs decode, layers 0-2'),
+    ('v09_logs/long_context_4layers_v09.json', 'Batched append vs decode, layers 0-3'),
+    ('v09_logs/long_context_4layers_v08code.json', 'Prefill vs decode on unchanged v0.8 code, layers 0-3'),
 ]
 
 

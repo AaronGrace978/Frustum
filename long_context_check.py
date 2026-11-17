@@ -7,12 +7,17 @@ same sequence:
 
   A. one prefill over all N tokens
   B. a prefill over the first N-k tokens, then k single-token decode steps
+  C. (v0.9, --append-chunk M > 1) a prefill over the first N-k tokens, then the k
+     tokens appended M at a time: the batched follow-up-prompt path
 
 The last k positions must agree. Prefill uses the batched attention path and
-decode the reference loop, so this also compares those two at scale.
+decode the reference loop, so this also compares those two at scale. C is
+compared with B, the schedule it replaces; it should differ from B only by the
+last-bit rounding of matrix products whose result depends on the batch size.
 
     python long_context_check.py                    # 160 tokens, first 4 layers
     python long_context_check.py --tokens 300 --layers 8
+    python long_context_check.py --tail 24 --append-chunk 8
 
 Cost: prefill touches most routed experts of every layer it runs. Four layers
 at 160 tokens read on the order of 15-20 GB per prefill, and there are two.
@@ -45,6 +50,8 @@ def main():
     parser.add_argument('--tokens', type=int, default=160, help='Sequence length; above 128 to wrap the window')
     parser.add_argument('--tail', type=int, default=8, help='Positions produced by decode steps in schedule B')
     parser.add_argument('--layers', type=int, default=4)
+    parser.add_argument('--append-chunk', type=int, default=0,
+                        help='Also run schedule C: append the tail this many tokens at a time (v0.9). 0 skips it')
     parser.add_argument('--dense-cache-mib', type=int, default=1024)
     parser.add_argument('--expert-cache-mib', type=int, default=4096)
     parser.add_argument('--output', type=Path, default=Path('long_context_results.json'))
@@ -95,6 +102,30 @@ def main():
             print(f'decode position {position + 1}/{args.tokens}', flush=True)
         incremental, incremental_mix = torch.cat(outputs, 1), torch.cat(mixes, 1)
         norm = torch.linalg.vector_norm
+        appended = None
+        if args.append_chunk > 1:
+            engine.forward(token_ids[:, :split], h[:, :split], 0, progress=progress('prefix prefill (C)'))
+            outputs, mixes = [], []
+            for begin in range(split, args.tokens, args.append_chunk):
+                end = min(begin + args.append_chunk, args.tokens)
+                piece, mix, _, _ = engine.forward(token_ids[:, begin:end], h[:, begin:end], begin)
+                outputs.append(piece.float())
+                mixes.append(mix)
+                print(f'appended positions {begin + 1}-{end}/{args.tokens}', flush=True)
+            batched, batched_mix = torch.cat(outputs, 1), torch.cat(mixes, 1)
+            appended = dict(
+                append_chunk=args.append_chunk,
+                relative_L2_vs_decode=float(norm(batched - incremental) / norm(incremental).clamp_min(1e-12)),
+                relative_L2_vs_decode_per_position=[
+                    float(norm(batched[:, i] - incremental[:, i]) / norm(incremental[:, i]).clamp_min(1e-12))
+                    for i in range(args.tail)],
+                max_abs_difference_vs_decode=float((batched - incremental).abs().max()),
+                bitwise_equal_to_decode=bool(torch.equal(batched, incremental)),
+                max_abs_residual_mix_difference_vs_decode=float((batched_mix - incremental_mix).abs().max()),
+                relative_L2_vs_full_prefill=float(norm(batched - full_tail) / norm(full_tail).clamp_min(1e-12)),
+                passed=bool(torch.isfinite(batched).all()
+                            and torch.allclose(incremental, batched, rtol=.02, atol=.01)
+                            and torch.allclose(incremental_mix, batched_mix, rtol=.02, atol=.01)))
         per_position = [float(norm(full_tail[:, i] - incremental[:, i]) / norm(full_tail[:, i]).clamp_min(1e-12))
                         for i in range(args.tail)]
         relative = float(norm(full_tail - incremental) / norm(full_tail).clamp_min(1e-12))
@@ -102,7 +133,8 @@ def main():
         # Same tolerances as the saved three-token schedule test in layers0_3_block.py.
         passed = (bool(torch.isfinite(incremental).all())
                   and torch.allclose(full_tail, incremental, rtol=.02, atol=.01)
-                  and torch.allclose(full_mix_tail, incremental_mix, rtol=.02, atol=.01))
+                  and torch.allclose(full_mix_tail, incremental_mix, rtol=.02, atol=.01)
+                  and (appended is None or appended['passed']))
         window = cfg['sliding_window']
         report = dict(
             status='PASS' if passed else 'FAIL',
@@ -115,6 +147,7 @@ def main():
             max_abs_difference=float((full_tail - incremental).abs().max()),
             max_abs_residual_mix_difference=mix_gap,
             tolerance=dict(rtol=.02, atol=.01),
+            batched_append=appended,
             unique_routed_experts_per_layer_full_prefill=unique,
             full_prefill_seconds=full_seconds, total_seconds=time.perf_counter() - started,
             attention_path=dict(prefill='batched', decode='reference loop'),

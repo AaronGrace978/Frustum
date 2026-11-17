@@ -28,7 +28,7 @@ def reusable_prefix(fed, ids):
     return 0
 
 
-def drive(fed, ids, max_new_tokens, eos, pick, run, reuse=True, on_token=None):
+def drive(fed, ids, max_new_tokens, eos, pick, run, reuse=True, on_token=None, append_chunk=1):
     """Produce up to max_new_tokens after prompt `ids`.
 
     fed: list of token ids the engine state currently covers. Mutated to stay
@@ -36,8 +36,13 @@ def drive(fed, ids, max_new_tokens, eos, pick, run, reuse=True, on_token=None):
     run(tokens, phase, want_logits) -> (logits or None, timing dict). The engine
          must start from scratch when phase == 'prefill' and append otherwise.
     pick(logits) -> token id.
+    append_chunk: new prompt tokens fed per engine step when extending existing state (v0.9).
+         1 is the old one-token-per-step behaviour; larger values cut the number of passes
+         over the layers, and so the number of per-layer expert-read stalls.
     Returns (output_ids, timings, reused_prompt_tokens, stopped_at_eos).
     """
+    if append_chunk < 1:
+        raise ValueError('append_chunk must be at least 1')
     reused = reusable_prefix(fed, ids) if reuse else 0
     if not reused:
         fed.clear()
@@ -52,9 +57,10 @@ def drive(fed, ids, max_new_tokens, eos, pick, run, reuse=True, on_token=None):
     try:
         pending = ids[reused:]
         if reused:
-            # With state present the engine advances one position per step.
-            for index, token in enumerate(pending):
-                logits = step([token], 'reuse_feed', index == len(pending) - 1)
+            # With state present the engine advances append_chunk positions per step.
+            for begin in range(0, len(pending), append_chunk):
+                piece = pending[begin:begin + append_chunk]
+                logits = step(piece, 'reuse_feed', begin + len(piece) == len(pending))
         else:
             logits = step(pending, 'prefill', True)
         stopped = False

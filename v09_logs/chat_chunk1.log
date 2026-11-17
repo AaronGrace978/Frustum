@@ -1,0 +1,25 @@
+GPU cap 12.00 GiB, 2.00 GiB kept for working memory
+  dense weights   5.24 GiB  resident
+  output head     1.23 GiB  resident
+  routers         0.15 GiB  resident
+  shared experts  1.32 GiB  pinned
+  routed experts  1.99 GiB cache, about 113 experts, policy lfu (one token needs up to 4.20 GiB)
+Host RAM tier 14.2 GiB
+Generating with the local checkpoint...
+  prefill: layer 10/40
+  prefill: layer 20/40
+  prefill: layer 30/40
+  prefill: layer 40/40
+Assistant: I think Dino Buddies is a cute and fun series for kids.
+[15 tokens, first after 58.0s, then 4.1 s/token; 0/18 prompt tokens reused; disk 79.08 GB; experts 21% GPU, 19% RAM, 60% disk]
+[decode I/O per token: 2.09 GB experts (0.98 GB re-read), drive busy 59% of the time at 858 MB/s, queue 2.8, physical/logical 1.00]
+Generating with the local checkpoint...
+  reusing 33 processed tokens, adding 8
+Assistant: Sure.
+[2 tokens, first after 35.8s, then 3.6 s/token; 33/41 prompt tokens reused; disk 22.73 GB; experts 26% GPU, 31% RAM, 43% disk]
+[decode I/O per token: 1.65 GB experts (1.02 GB re-read), drive busy 53% of the time at 859 MB/s, queue 2.6, physical/logical 1.00]
+Generating with the local checkpoint...
+  reusing 43 processed tokens, adding 29
+Assistant: Reading a large model from a USB drive is slow because USB interfaces have much lower
+[16 tokens, first after 123.7s, then 3.9 s/token; 43/72 prompt tokens reused; disk 93.27 GB; experts 31% GPU, 29% RAM, 40% disk]
+[decode I/O per token: 1.91 GB experts (1.40 GB re-read), drive busy 57% of the time at 863 MB/s, queue 2.8, physical/logical 1.00]

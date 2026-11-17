@@ -2,9 +2,9 @@
 
 Streaming inference for checkpoints far larger than GPU memory. The reference target is DeepSeek-V4.1-Flash (about 510 GB on disk) on one 16 GB GPU, read from an external SSD.
 
-Current code: v0.8 (unbuffered reads and a larger RAM tier: DeepSeek decode **5.69 → 4.06 s/token** measured on an RTX 5060 Ti with the checkpoint on a USB SSD; see below). Live v0.5.1 benchmarks from a first test session are further down. The numbers under "History and recorded evidence" were measured with v0.4. Run the verification and benchmark steps below to get current numbers for your machine.
+Current code: v0.9. Measured on an RTX 5060 Ti with the checkpoint on a USB SSD: DeepSeek decode **5.69 → 4.06 s/token** (v0.8, unbuffered reads), and follow-up turns start replying up to **51% sooner** (v0.9, batched follow-up prompts). See below. Live v0.5.1 benchmarks from a first test session are further down. The numbers under "History and recorded evidence" were measured with v0.4. Run the verification and benchmark steps below to get current numbers for your machine.
 
-**Whitepaper:** [`whitepaper/Frustum_loader_Whitepaper_v0.8.0.pdf`](whitepaper/Frustum_loader_Whitepaper_v0.8.0.pdf) documents the design, the v0.5.1 live benchmarks, v0.7's I/O/roofline tooling and v0.8's measured results. Details and evidence: [`CHANGES_v0.8.md`](CHANGES_v0.8.md) and `v08_logs/`; [`CHANGES_v0.7.md`](CHANGES_v0.7.md) and `v07_logs/`. Rebuild the current whitepaper with `python whitepaper/build_whitepaper.py`. Earlier editions are in `whitepaper/archive/`.
+**Whitepaper:** [`whitepaper/Frustum_loader_Whitepaper_v0.9.0.pdf`](whitepaper/Frustum_loader_Whitepaper_v0.9.0.pdf) documents the design, the v0.5.1 live benchmarks, v0.7's I/O/roofline tooling and the v0.8 and v0.9 measured results. Details and evidence: [`CHANGES_v0.9.md`](CHANGES_v0.9.md) and `v09_logs/`; [`CHANGES_v0.8.md`](CHANGES_v0.8.md) and `v08_logs/`; [`CHANGES_v0.7.md`](CHANGES_v0.7.md) and `v07_logs/`. Rebuild the current whitepaper with `python whitepaper/build_whitepaper.py`. Earlier editions are in `whitepaper/archive/`.
 
 ## Quick start
 
@@ -20,6 +20,24 @@ The launchers look for Python in this order: `FRUSTUM_PYTHON`, `.venv\Scripts\py
     .venv\Scripts\pip install -r requirements.txt
 
 The model folder defaults to the parent of this folder. Set `FRUSTUM_MODEL` or pass `--model` to point elsewhere. Weights and the CUDA environment are not bundled.
+
+## What v0.9 changes
+
+Follow-up turns used to feed their new prompt tokens through all 40 layers one token at a time, paying the per-layer expert-read stall for every token. Attention can now extend the conversation state by many tokens in one pass, so a follow-up prompt goes through in one pass (or a few, for long ones). Full details: [`CHANGES_v0.9.md`](CHANGES_v0.9.md).
+
+| Follow-up, full 40-layer model | v0.8 (one token per pass) | v0.9 (`--append-chunk 32`, default) |
+|---|---|---|
+| "Say one word." (8 new tokens) | 35.8 s to first token | **22.1 s (−38%)** |
+| A 29-token question | 123.7 s | **60.1 s (−51%)** |
+| Reply tokens | | Identical to v0.8 on every turn |
+
+- Each appended token gets exactly the sliding window, compressed groups and attention arithmetic a one-token decode step would give it. Unit tests check the window rows and compressor state bit for bit against decode; on the real model, layer 0 agrees with decode on 13 of 16 positions bit for bit (prefill differs from decode 17× more).
+- `--append-chunk N` / `FRUSTUM_APPEND_CHUNK` sets tokens per pass; `1` restores v0.8. `--followup TEXT` (repeatable) scripts a multi-turn run in one process.
+- `long_context_check.py --append-chunk 8` compares batched append with decode beyond the 128-token window. Note: that check's own tolerance already fails at 4 layers on unchanged v0.8 code (prefill vs decode differ by ~4.6%); see the changes file.
+
+    python frustum_chat.py --prompt "Do you like Dino Buddies?" --followup "Say one word." --append-chunk 1   # v0.8 behaviour
+    python frustum_chat.py --prompt "Do you like Dino Buddies?" --followup "Say one word."                    # v0.9 default
+    python long_context_check.py --tokens 160 --tail 24 --layers 4 --append-chunk 8
 
 ## What v0.8 changes
 
@@ -340,4 +358,4 @@ Start interactive text chat with `.\run_chat.ps1`, or run one prompt with `.\run
 
 - **Aaron Grace** — Architecture, original engine (v0.1–v0.4), layer-0 block, MoE pipeline, sparse attention, GGUF backends, ActivatePrime
 - **OpenAI** — Codex environment and tooling used during development
-- **Claude (Anthropic)** — v0.5 to v0.8 engineering: unbuffered reader and v0.8 measurements, I/O ledger and roofline tooling, fused decode kernels, next-layer expert prediction, I/O rewrite, tiered expert cache, placement planner, generation control flow, cache policy, batched attention, expert decode, GLM cache migration, verification harness, ActivatePrime integration
+- **Claude (Anthropic)** — v0.5 to v0.9 engineering: batched follow-up prompts, unbuffered reader and v0.8 measurements, I/O ledger and roofline tooling, fused decode kernels, next-layer expert prediction, I/O rewrite, tiered expert cache, placement planner, generation control flow, cache policy, batched attention, expert decode, GLM cache migration, verification harness, ActivatePrime integration

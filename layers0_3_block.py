@@ -120,6 +120,27 @@ def sparse_attention(q, kv, sink, idxs, chunk=64):
     return out
 
 
+def group_positions(start, count, ratio, device):
+    """First positions of the `count` compressed groups completed by tokens appended at `start`.
+
+    The first group a call can complete is start // ratio (its last position is the first one
+    at or after `start` with position % ratio == ratio - 1). For a single decode token this is
+    the old positions[-1] - (ratio - 1); for a prefill it is positions[::ratio]."""
+    first = start // ratio
+    return torch.arange(first, first + count, device=device) * ratio
+
+
+def append_window_indices(batch, seqlen, window, start, lo, device):
+    """Sliding-window rows for tokens appended at `start` to state, over a key sequence that
+    holds positions lo .. start + seqlen - 1. Each token gets the `window` positions ending at
+    itself, in ascending order (the order RingKV.latest() gives a decode step); slots before
+    position 0 are -1."""
+    positions = torch.arange(start, start + seqlen, device=device).unsqueeze(1)
+    keys = positions - window + 1 + torch.arange(window, device=device)
+    ids = torch.where(keys >= 0, keys - lo, -1).int()
+    return ids.unsqueeze(0).expand(batch, -1, -1).contiguous()
+
+
 def window_indices(batch, seqlen, window, start, cache_len, device):
     if start:
         return torch.arange(cache_len, device=device, dtype=torch.int32).view(1, 1, -1).expand(batch, seqlen, -1).contiguous()
@@ -261,17 +282,22 @@ class Compressor:
             score = score[:, :cutoff].unflatten(1, (-1, self.ratio))
             pooled = (kv * score.softmax(2)).sum(2)
         else:
-            if seqlen != 1:
-                raise ValueError('Decode requires one token per step')
+            # Appending to existing state. One token is a decode step; v0.9 also accepts several
+            # (a batched follow-up prompt). Each token goes through the decode step's slot logic
+            # in order, so every pooled group is computed exactly as one-at-a-time decode does.
             if self.state.kv_tail is None:
                 self.state.kv_tail = torch.zeros(bsz, self.ratio, kv.shape[-1], device=x.device, dtype=torch.float32)
                 self.state.score_tail = torch.full_like(self.state.kv_tail, -torch.inf)
-            slot = start % self.ratio
-            self.state.kv_tail[:, slot] = kv[:, 0]
-            self.state.score_tail[:, slot] = score[:, 0]
-            if slot != self.ratio - 1:
+            groups = []
+            for i in range(seqlen):
+                slot = (start + i) % self.ratio
+                self.state.kv_tail[:, slot] = kv[:, i]
+                self.state.score_tail[:, slot] = score[:, i]
+                if slot == self.ratio - 1:
+                    groups.append((self.state.kv_tail * self.state.score_tail.softmax(1)).sum(1, keepdim=True))
+            if not groups:
                 return None
-            pooled = (self.state.kv_tail * self.state.score_tail.softmax(1)).sum(1, keepdim=True)
+            pooled = groups[0] if len(groups) == 1 else torch.cat(groups, 1)
         return self.ops.norm(pooled.to(x.dtype), p + 'norm')
 
 
@@ -288,7 +314,8 @@ class Indexer:
         rd = self.cfg['qk_rope_head_dim']
         state = self.shared.active
         if self.owns_keys and latent is not None:
-            freq_positions = positions[:seqlen - seqlen % self.ratio:self.ratio] if start == 0 else positions[-1:].sub(self.ratio - 1)
+            freq_positions = (positions[:seqlen - seqlen % self.ratio:self.ratio] if start == 0
+                              else group_positions(start, latent.shape[1], self.ratio, x.device))
             k = self.ops.norm(self.ops.linear(latent, p + 'wk'), p + 'k_norm')
             k[..., -rd:] = rope(k[..., -rd:], freq_positions, self.cfg['compress_rope_theta'], self.cfg['rope_scaling']['original_max_position_embeddings'], self.cfg['rope_scaling']['factor'], self.cfg['rope_scaling']['beta_fast'], self.cfg['rope_scaling']['beta_slow'])
             k = fp4_quant_dequant(k, 32, power2_scale=True)
@@ -306,8 +333,11 @@ class Indexer:
         score = (torch.einsum('bshd,btd->bsht', q, key).relu() * weights.unsqueeze(-1)).sum(2)
         if start == 0:
             visible = (torch.arange(1, seqlen + 1, device=x.device) // self.ratio).view(1, seqlen, 1)
-        else:
+        elif seqlen == 1:
             visible = torch.full((1, seqlen, 1), compressed_len, device=x.device)
+        else:
+            # v0.9 batched append: each token sees the groups completed up to its own position.
+            visible = ((positions + 1) // self.ratio).view(1, seqlen, 1)
         score.masked_fill_(torch.arange(compressed_len, device=x.device).view(1, 1, -1) >= visible, -torch.inf)
         candidate_layer = self.cfg['candidate_source_layer_id']
         if self.layer == candidate_layer:
@@ -355,9 +385,19 @@ class Attention:
             self.cfg['rope_scaling']['beta_fast'], self.cfg['rope_scaling']['beta_slow'],
         )
         kv = activation(kv.reshape(-1, kv.shape[-1])).reshape(kv.shape).to(torch.bfloat16)
+        window_size = self.cfg['sliding_window']
+        if start and x.shape[1] > 1:
+            # v0.9 batched append. The ring only holds `window` positions, so appending first would
+            # overwrite rows the earlier new tokens still need. Take the window-1 most recent rows
+            # before appending, put the new rows after them, and give each token its own window.
+            older = self.ring.recent(window_size - 1)
+            lo = start - older.shape[1]
+            keys = torch.cat((older, kv), 1)
+            self.ring.append(kv, start)
+            return keys, append_window_indices(x.shape[0], x.shape[1], window_size, start, lo, x.device)
         self.ring.append(kv, start)
         window = kv if start == 0 else self.ring.latest()
-        return window, window_indices(x.shape[0], x.shape[1], self.cfg['sliding_window'], start, window.shape[1], x.device)
+        return window, window_indices(x.shape[0], x.shape[1], window_size, start, window.shape[1], x.device)
 
     def _compressed(self, x, qr, start, offset, positions):
         compressed_len = (start + x.shape[1]) // self.ratio
@@ -373,7 +413,8 @@ class Attention:
             indexes = self.shared.topk
         if latent is not None:
             rd = self.cfg['qk_rope_head_dim']
-            latent_positions = positions[:x.shape[1] - x.shape[1] % self.ratio:self.ratio] if start == 0 else positions[-1:].sub(self.ratio - 1)
+            latent_positions = (positions[:x.shape[1] - x.shape[1] % self.ratio:self.ratio] if start == 0
+                                else group_positions(start, latent.shape[1], self.ratio, x.device))
             latent[..., -rd:] = rope(latent[..., -rd:], latent_positions, self.cfg['compress_rope_theta'], self.cfg['rope_scaling']['original_max_position_embeddings'], self.cfg['rope_scaling']['factor'], self.cfg['rope_scaling']['beta_fast'], self.cfg['rope_scaling']['beta_slow'])
             latent = fp4_quant_dequant(latent, 16, power2_scale=False)
             self.source_state.write_kv(latent, start // self.ratio)
@@ -385,8 +426,6 @@ class Attention:
 
     def __call__(self, x, start):
         bsz, seqlen, _ = x.shape
-        if start and seqlen != 1:
-            raise ValueError('Decode requires one token per step')
         positions = torch.arange(start, start + seqlen, device=x.device)
         p, rd = f'layers.{self.layer}.attn.', self.cfg['qk_rope_head_dim']
         qr = self.ops.norm(self.ops.linear(x, p + 'wq_a'), p + 'q_norm')
@@ -396,7 +435,10 @@ class Attention:
         if self.ratio:
             compressed, compressed_indexes = self._compressed(x, qr, start, kv.shape[1], positions)
             kv, indexes = torch.cat((kv, compressed), 1), torch.cat((indexes, compressed_indexes), -1)
-        o = sparse_attention(q, kv, self.ops.tensor(p + 'attn_sink'), indexes)
+        sink = self.ops.tensor(p + 'attn_sink')
+        # Appending to state (decode, or a v0.9 batched follow-up prompt) uses the per-token reference
+        # loop, so each token gathers and sums its rows in the same order as one-at-a-time decode.
+        o = sparse_attention_reference(q, kv, sink, indexes) if start else sparse_attention(q, kv, sink, indexes)
         o[..., -rd:] = rope(o[..., -rd:], positions, self.cfg['rope_theta'] if not self.ratio else self.cfg['compress_rope_theta'], 0 if not self.ratio else self.cfg['rope_scaling']['original_max_position_embeddings'], 1 if not self.ratio else self.cfg['rope_scaling']['factor'], self.cfg['rope_scaling']['beta_fast'], self.cfg['rope_scaling']['beta_slow'], inverse=True)
         groups, rank = self.cfg['o_groups'], self.cfg['o_lora_rank']
         o = activation(o.reshape(bsz, seqlen, groups, -1).reshape(-1, self.cfg['head_dim'] * self.cfg['num_attention_heads'] // groups)).reshape(bsz, seqlen, groups, -1).to(torch.bfloat16)

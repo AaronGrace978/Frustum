@@ -88,12 +88,25 @@ def make_sampler(temperature=0.0, top_k=0, top_p=1.0, seed=None):
     return pick
 
 
+DEFAULT_APPEND_CHUNK = 32
+
+
 class Session:
-    """Engine plus the exact token sequence its attention state currently covers."""
-    def __init__(self, engine, tokenizer, head, reuse=True):
+    """Engine plus the exact token sequence its attention state currently covers.
+
+    append_chunk (v0.9): new prompt tokens fed per pass on a follow-up turn. Default:
+    FRUSTUM_APPEND_CHUNK, else 32: on the target machine a 29-token follow-up took 123.7 s one
+    token per pass, 87.7 s with 8 and 60.1 s with 32 (bench_runs/v09_append). 1 restores the v0.8
+    one-token-per-pass behaviour."""
+    def __init__(self, engine, tokenizer, head, reuse=True, append_chunk=None):
         self.engine, self.tokenizer, self.head, self.reuse = engine, tokenizer, head, reuse
         self.eos = tokenizer.token_to_id('<｜end▁of▁sentence｜>')
         self.fed = []
+        if append_chunk is None:
+            append_chunk = int(os.environ.get('FRUSTUM_APPEND_CHUNK', DEFAULT_APPEND_CHUNK))
+        if append_chunk < 1:
+            raise ValueError('append_chunk must be at least 1')
+        self.append_chunk = append_chunk
 
     def readers(self):
         engine = self.engine
@@ -172,7 +185,8 @@ def generate(session, ids, max_new_tokens, pick, on_token=None, profile_decode=F
     reused = reusable_prefix(session.fed, ids) if session.reuse else 0
     if reused:
         print(f'  reusing {reused} processed tokens, adding {len(ids) - reused}', flush=True)
-    return drive(session.fed, ids, max_new_tokens, session.eos, pick, run, session.reuse, on_token)
+    return drive(session.fed, ids, max_new_tokens, session.eos, pick, run, session.reuse, on_token,
+                 append_chunk=getattr(session, 'append_chunk', 1))
 
 
 def build_plan(catalog, args, total, free):
@@ -239,6 +253,12 @@ def main():
     parser.add_argument('--top-logprobs', type=int, default=0,
                         help='Record the K most likely tokens and their log-probabilities per step in --evidence')
     parser.add_argument('--no-reuse', action='store_true', help='Re-prefill the whole conversation every turn')
+    parser.add_argument('--append-chunk', type=int,
+                        help='New prompt tokens per pass on a follow-up turn (v0.9). Default: FRUSTUM_APPEND_CHUNK, '
+                             'else 32; 1 feeds them one at a time as v0.8 did')
+    parser.add_argument('--followup', action='append', metavar='TEXT',
+                        help='With --prompt: another user turn to run after it in the same conversation (repeatable). '
+                             '--evidence then describes the last turn and lists every turn under "turns"')
     parser.add_argument('--verbose', action='store_true', help='Per-token timing lines instead of streamed text')
     parser.add_argument('--no-fused', action='store_true',
                         help='Decode steps use the reference decode-then-multiply path instead of fused kernels')
@@ -289,6 +309,10 @@ def main():
         raise SystemExit('CUDA required')
     if args.predict_next is not None and args.predict_next < 0:
         parser.error('--predict-next takes 0 or more')
+    if args.followup and args.prompt is None:
+        parser.error('--followup requires --prompt')
+    if args.append_chunk is not None and args.append_chunk < 1:
+        parser.error('--append-chunk takes 1 or more')
     if args.legacy:
         if args.reader:
             parser.error('--reader cannot be combined with --legacy (which uses the mmap reader)')
@@ -328,7 +352,10 @@ def main():
         checkpoint_id = (str(catalog.root), catalog.index.get('metadata', {}).get('total_size'), len(catalog.tensors))
         engine.moe.cache.spill = SpillTier(args.spill_dir, int(args.spill_gib * GIB), checkpoint_id)
     device_counters = os_cache.DeviceCounters(args.model)
-    session = Session(engine, tokenizer, head, reuse=not (args.no_reuse or args.legacy))
+    session = Session(engine, tokenizer, head, reuse=not (args.no_reuse or args.legacy),
+                      append_chunk=1 if args.legacy else args.append_chunk)
+    scripted = None if args.prompt is None else [args.prompt] + list(args.followup or [])
+    turns = []
     sample = make_sampler(args.temperature, args.top_k, args.top_p, args.seed)
     distributions = []
 
@@ -343,8 +370,8 @@ def main():
     history = []
     try:
         while True:
-            if args.prompt is not None:
-                prompt = args.prompt
+            if scripted is not None:
+                prompt = scripted.pop(0)
             else:
                 try:
                     prompt = input('You: ')
@@ -446,7 +473,14 @@ def main():
                       f'{show(d["drive_utilization"] and 100 * d["drive_utilization"], ".0f")}% of the time at '
                       f'{show(d["effective_MBps"], ".0f")} MB/s, queue {show(d["mean_queue_depth"], ".1f")}, '
                       f'physical/logical {show(summary["physical_over_logical"], ".2f")}]', flush=True)
-            if args.evidence:
+            feed = [t for t in timings if t['phase'] == 'reuse_feed']
+            summary['prompt_passes'] = len(feed) if reused else 1
+            turns.append(dict(prompt=prompt, reply=reply, token_ids=tokens, prompt_token_ids=ids,
+                              reused_prompt_tokens=reused, new_prompt_tokens=len(ids) - reused,
+                              prompt_passes=summary['prompt_passes'], append_chunk=session.append_chunk,
+                              first_token_seconds=first, mean_decode_seconds=summary['mean_decode_seconds'],
+                              disk_bytes=summary['disk_bytes']))
+            if args.evidence and (scripted is None or not scripted):
                 with args.evidence.open('x', encoding='utf-8') as handle:
                     json.dump(dict(prompt=prompt, prompt_text=prompt_text, prompt_token_ids=ids,
                                    reply=reply, token_ids=tokens,
@@ -465,9 +499,9 @@ def main():
                                    reader=os.environ.get('FRUSTUM_READER', 'direct'),
                                    expert_cache=cache.stats(), dense_cache=engine.ops.loader.stats(),
                                    prediction=engine.moe.prediction_stats(), fused=fused_report(),
-                                   top_logprobs=distributions,
-                                   token_timings=timings), handle, indent=2)
-            if args.prompt is not None:
+                                   top_logprobs=distributions, append_chunk=session.append_chunk,
+                                   turns=turns, token_timings=timings), handle, indent=2)
+            if scripted is not None and not scripted:
                 break
             history.append((prompt, reply))
     finally:

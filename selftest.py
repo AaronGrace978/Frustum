@@ -306,7 +306,7 @@ class GenerationTests(unittest.TestCase):
         def run(tokens, phase, want_logits):
             if phase == 'prefill':
                 state.clear()
-            elif len(tokens) != 1:
+            elif phase == 'decode' and len(tokens) != 1:
                 raise ValueError('Decode requires one token per step')
             state.extend(tokens)
             calls.append((phase, list(tokens), want_logits))
@@ -349,6 +349,27 @@ class GenerationTests(unittest.TestCase):
             _, _, reused, _ = drive(fed, ids, 1, eos=99, pick=lambda seen: 4, run=run, reuse=reuse)
             self.assertEqual((reused, calls[0][0], state), (0, 'prefill', ids))
 
+    def test_batched_append_chunks(self):
+        """v0.9: follow-up prompt tokens go in append_chunk pieces; only the last wants logits."""
+        for chunk, pieces in ((1, [[99], [5], [6], [7], [8]]), (2, [[99, 5], [6, 7], [8]]),
+                              (8, [[99, 5, 6, 7, 8]]), (5, [[99, 5, 6, 7, 8]])):
+            state, calls, run = self.engine()
+            fed = []
+            replies = iter([7, 8, 99])
+            drive(fed, [1, 2], 8, eos=99, pick=lambda seen: next(replies), run=run)
+            calls.clear()
+            follow = [1, 2, 7, 8, 99, 5, 6, 7, 8]
+            out, timings, reused, _ = drive(fed, follow, 2, eos=99, pick=lambda seen: 42, run=run,
+                                            append_chunk=chunk)
+            self.assertEqual(reused, 4)
+            feeds = [c for c in calls if c[0] == 'reuse_feed']
+            self.assertEqual([c[1] for c in feeds], pieces)
+            self.assertEqual([c[2] for c in feeds], [False] * (len(pieces) - 1) + [True])
+            self.assertEqual(state, follow + [42])
+            self.assertEqual(fed, state)
+        with self.assertRaises(ValueError):
+            drive([], [1], 1, eos=99, pick=lambda seen: 4, run=run, append_chunk=0)
+
     def test_failure_invalidates_state(self):
         fed = [1, 2]
 
@@ -357,6 +378,83 @@ class GenerationTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             drive(fed, [1, 2, 3], 1, eos=99, pick=lambda seen: 4, run=broken)
         self.assertEqual(fed, [])
+
+
+class BatchedAppendTests(unittest.TestCase):
+    """v0.9: appending several tokens to attention state gives each token what decode gives it."""
+
+    def test_window_rows_match_decode(self):
+        import torch
+        from layer0_block import RingKV
+        from layers0_3_block import append_window_indices
+        window, dim = 8, 3
+        for prefix, extra in ((3, 4), (6, 5), (7, 1), (20, 6), (13, 8), (2, 12)):
+            total = prefix + extra
+            rows = torch.randn(1, total, dim)
+            decode, batched = RingKV(window), RingKV(window)
+            decode.append(rows[:, :prefix], 0)
+            batched.append(rows[:, :prefix], 0)
+            expected = []
+            for position in range(prefix, total):  # one token per step, as a decode step does
+                decode.append(rows[:, position:position + 1], position)
+                expected.append(decode.latest())
+            older = batched.recent(window - 1)
+            lo = prefix - older.shape[1]
+            keys = torch.cat((older, rows[:, prefix:]), 1)
+            batched.append(rows[:, prefix:], prefix)
+            ids = append_window_indices(1, extra, window, prefix, lo, 'cpu')
+            for i in range(extra):
+                chosen = ids[0, i]
+                got = keys[:, chosen[chosen >= 0].long()]
+                self.assertTrue(torch.equal(got, expected[i]), (prefix, extra, i))
+            self.assertTrue(torch.equal(batched.data, decode.data))
+            self.assertEqual(batched.next_position, decode.next_position)
+
+    def test_group_positions(self):
+        from layers0_3_block import group_positions
+        # A decode step that completes a group: positions[-1] - (ratio - 1).
+        self.assertEqual(group_positions(11, 1, 4, 'cpu').tolist(), [8])
+        self.assertEqual(group_positions(5, 1, 1, 'cpu').tolist(), [5])
+        # Prefill: positions[::ratio].
+        self.assertEqual(group_positions(0, 3, 4, 'cpu').tolist(), [0, 4, 8])
+        # Appending positions 9..17 with ratio 4 completes groups 8..11 and 12..15 (16..19 is not complete).
+        self.assertEqual(group_positions(9, 2, 4, 'cpu').tolist(), [8, 12])
+
+    def test_compressor_matches_decode(self):
+        import torch
+        from types import SimpleNamespace
+        from layers0_3_block import CompressedState, Compressor
+        dim = 6
+        gen = torch.Generator().manual_seed(3)
+        weights = {'wkv': torch.randn(dim, dim, generator=gen), 'wgate': torch.randn(dim, dim, generator=gen)}
+
+        class Ops:
+            cfg = dict(compress_ratios=[4])
+
+            @staticmethod
+            def float_linear(x, name):  # row by row: no batch-size-dependent rounding in the test itself
+                w = weights[name.rsplit('.', 1)[-1]]
+                return torch.stack([(row.float() * w).sum(-1) for row in x.reshape(-1, dim)]).reshape(*x.shape[:-1], dim)
+
+            @staticmethod
+            def norm(x, name):
+                return x
+
+        for prefix, extra in ((5, 7), (8, 4), (3, 1), (6, 9)):
+            x = torch.randn(1, prefix + extra, dim, generator=gen)
+            one, many = CompressedState(64, 4), CompressedState(64, 4)
+            a, b = Compressor(Ops, 0, one), Compressor(Ops, 0, many)
+            a(x[:, :prefix], 0)
+            b(x[:, :prefix], 0)
+            expected = [a(x[:, p:p + 1], p) for p in range(prefix, prefix + extra)]
+            expected = [e for e in expected if e is not None]
+            got = b(x[:, prefix:], prefix)
+            if not expected:
+                self.assertIsNone(got)
+            else:
+                self.assertTrue(torch.equal(got, torch.cat(expected, 1)), (prefix, extra))
+            self.assertTrue(torch.equal(one.kv_tail, many.kv_tail))
+            self.assertTrue(torch.equal(one.score_tail, many.score_tail))
 
 
 class TemplateTests(unittest.TestCase):

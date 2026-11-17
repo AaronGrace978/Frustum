@@ -41,7 +41,10 @@ class RingKV:
         for i in range(n):self.data[:,(start+i)%self.window]=kv[:,i]
         self.next_position+=n
     def latest(self):
-        lo=max(0,self.next_position-self.window)
+        return self.recent(self.window)
+    def recent(self,count):
+        """Rows of the `count` most recent positions (fewer if not yet written), oldest first."""
+        lo=max(0,self.next_position-min(count,self.window))
         ids=torch.arange(lo,self.next_position,device=self.data.device)%self.window
         return self.data[:,ids]
 
