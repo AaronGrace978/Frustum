@@ -21,6 +21,15 @@ The launchers look for Python in this order: `FRUSTUM_PYTHON`, `.venv\Scripts\py
 
 The model folder defaults to the parent of this folder. Set `FRUSTUM_MODEL` or pass `--model` to point elsewhere. Weights and the CUDA environment are not bundled.
 
+## Qwen3-Next-80B-A3B (new, not yet run on the real checkpoint)
+
+[`qwen_next_chat.py`](qwen_next_chat.py) runs [Qwen/Qwen3-Next-80B-A3B-Instruct](https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct) (163 GB BF16, 48 layers, 512 experts with 10 active per token) on the same tiered expert cache as DeepSeek and GLM. About 3.7 GiB of dense weights stay on the GPU. The 6 MiB routed experts stream through the GPU tier, a host-RAM tier (`FRUSTUM_QWEN_HOST_GIB`, default 85% of free RAM above 6 GiB, up to 16 GiB) and the drive. The token embedding is read one row per token. It is a plain-PyTorch implementation of both layer types: gated full attention (every fourth layer) and Gated DeltaNet linear attention with a fixed-size recurrent state (the other 36). Follow-up turns that extend the previous token ids only process the new tokens. ActivatePrime 0.1.5 exposes it as "Qwen3-Next 80B".
+
+[`qwen_next_parity.py`](qwen_next_parity.py) checks it against the transformers 4.57 reference on a tiny random two-shard checkpoint (prefill, single-token decode and a multi-token append, with evictions and RAM-tier hits). Float32 agrees to 5e-6 of the logit scale, with the same argmax at every position. In bf16 it is as close to the float32 result as the reference's own bf16 path, or closer.
+
+    python qwen_next_chat.py --prompt "Say hello." --max-new-tokens 8
+    set QWEN_PARITY_TRANSFORMERS=<folder with transformers 4.57>  &  python qwen_next_parity.py
+
 ## What v0.10 changes
 
 Exact (bit-identical) cuts to per-token GPU and Python overhead: a fused activation kernel (0.274 to 0.036 ms per call, self-checked against PyTorch and self-disabling on any difference; `FRUSTUM_FUSED_ACT=0` turns it off), one shared quantization for w1 and w3, and CPU-side scale checks that remove 761 GPU synchronisations per token. Decode is about 2-4% faster with identical tokens: most of that work was already hidden behind drive reads. The whitepaper's new Section 20 records the research from this round: the DSpark analysis (paused: verifying drafts needs 3.4x the experts), game-engine streaming ideas, native FP4 on the 5060 Ti, hardware outlook and a roadmap. See [`CHANGES_v0.10.md`](CHANGES_v0.10.md).
